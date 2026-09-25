@@ -49,7 +49,7 @@ SourceTree-like git GUI (Swing) using [GitUp](https://gitup.co)'s `GitUpKit.fram
    * accounts: service, host, username, protocol; passwords / tokens in the macOS Keychain (shared with git's osxkeychain helper),
      used when a fetch / push asks for credentials; import from `~/.m2/settings.xml` servers (checkbox per server,
      service / host guessed from the id, token headers of GitLab style servers too, encrypted passwords are skipped)
-   * diff: colors (added / removed / hunk header / selection), lines of context,
+   * diff: colors (added / removed lines background and text like SourceTree, hunk header / selection), lines of context,
      external diff and merge tools (FileMerge, VS Code, Kaleidoscope, Beyond Compare, Meld, P4Merge or a custom command)
  * file menu: external diff, external merge tool for a conflicted file
  * command history (⇧⌘H): the git commands equivalent to what was done (libgit2 / GitUpKit calls, GitUp's rewrites as

@@ -20,8 +20,8 @@ import java.util.prefs.Preferences;
  */
 public final class Settings {
 
-    /** the colors of the diff view, null means the theme's default */
-    public enum DiffColor { ADDED, REMOVED, HUNK_HEADER, SELECTION }
+    /** the colors of the diff view, null means the theme's default. ADDED / REMOVED are backgrounds, *_TEXT the text */
+    public enum DiffColor { ADDED, REMOVED, ADDED_TEXT, REMOVED_TEXT, HUNK_HEADER, SELECTION }
 
     public static final int DEFAULT_CONTEXT_LINES = 3;
 

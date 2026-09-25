@@ -218,6 +218,8 @@ public class DiffView extends JComponent implements Scrollable {
         return switch (key) {
             case ADDED -> dark ? new Color(0x1f3d2a) : new Color(0xe6ffed);
             case REMOVED -> dark ? new Color(0x4a2127) : new Color(0xffeef0);
+            case ADDED_TEXT -> dark ? new Color(0x3fb950) : new Color(0x1a7f37);
+            case REMOVED_TEXT -> dark ? new Color(0xf85149) : new Color(0xcf222e);
             case HUNK_HEADER -> dark ? new Color(0x2b3445) : new Color(0xf1f8ff);
             case SELECTION -> dark ? new Color(0x3d5a80) : new Color(0xb4d5fe);
         };
@@ -238,6 +240,8 @@ public class DiffView extends JComponent implements Scrollable {
         Color dim = UIManager.getColor("Label.disabledForeground");
         Color addBg = color(Settings.DiffColor.ADDED);
         Color delBg = color(Settings.DiffColor.REMOVED);
+        Color addFg = color(Settings.DiffColor.ADDED_TEXT);
+        Color delFg = color(Settings.DiffColor.REMOVED_TEXT);
         Color headBg = color(Settings.DiffColor.HUNK_HEADER);
         Color selBg = color(Settings.DiffColor.SELECTION);
         Color gutterBg = dark ? bg.brighter() : new Color(0xf6f8fa);
@@ -285,7 +289,7 @@ public class DiffView extends JComponent implements Scrollable {
             boolean marker = o == '=' || o == '>' || o == '<';
             String text = marker ? "\\ No newline at end of file" : expandTabs(row.content());
             widest = Math.max(widest, text.length());
-            g.setColor(marker ? dim : fg);
+            g.setColor(marker ? dim : o == '+' ? addFg : o == '-' ? delFg : fg);
             if (!marker) g.drawString(String.valueOf(o == ' ' ? ' ' : o), gw - charWidth, y + ascent);
             g.drawString(text, gw + 4, y + ascent);
         }

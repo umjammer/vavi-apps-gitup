@@ -66,6 +66,9 @@ class SettingsTest {
         assertEquals(new Color(0x12, 0x34, 0x56), new Settings(prefs).diffColor(Settings.DiffColor.ADDED));
         s.setDiffColor(Settings.DiffColor.ADDED, null);
         assertNull(s.diffColor(Settings.DiffColor.ADDED));
+        s.setDiffColor(Settings.DiffColor.REMOVED_TEXT, new Color(0xcf, 0x22, 0x2e));
+        assertEquals(new Color(0xcf, 0x22, 0x2e), new Settings(prefs).diffColor(Settings.DiffColor.REMOVED_TEXT));
+        assertNull(s.diffColor(Settings.DiffColor.REMOVED), "the background is separate");
         assertEquals(3, s.contextLines());
         s.setContextLines(10);
         assertEquals(10, s.contextLines());
@@ -77,7 +80,7 @@ class SettingsTest {
         assertTrue(s.protectPushed(), "on by default");
         s.setProtectPushed(false);
         assertFalse(new Settings(prefs).protectPushed());
-        assertEquals(6, changes[0]);
+        assertEquals(7, changes[0]);
     }
 
     @Test

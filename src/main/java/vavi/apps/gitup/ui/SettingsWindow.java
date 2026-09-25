@@ -386,8 +386,10 @@ public class SettingsWindow extends JFrame {
             c.gridy = row++;
             c.gridx = 0;
             colors.add(new JLabel(switch (key) {
-                case ADDED -> "Added lines:";
-                case REMOVED -> "Removed lines:";
+                case ADDED -> "Added lines (background):";
+                case REMOVED -> "Removed lines (background):";
+                case ADDED_TEXT -> "Added lines (text):";
+                case REMOVED_TEXT -> "Removed lines (text):";
                 case HUNK_HEADER -> "Hunk headers:";
                 case SELECTION -> "Selected lines:";
             }), c);
