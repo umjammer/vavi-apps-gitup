@@ -1596,10 +1596,13 @@ public class RepoPanel extends JPanel {
 
     /** urls a saved account was already tried for in the current remote operation */
     private final java.util.Set<String> triedAccounts = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** the saved account used in the current remote operation, for the error message */
+    private volatile vavi.apps.gitup.model.Accounts.Account triedAccount;
 
     /** runs a remote operation on the git thread with the GitUpKit transport, op returns a status message */
     private void remoteOp(String label, Function<RemoteOps, String> op) {
         triedAccounts.clear();
+        triedAccount = null;
         remoteActions.forEach(a -> a.setEnabled(false));
         statusBar.setText(label + "…");
         exec.submit(() -> {
@@ -1614,7 +1617,13 @@ public class RepoPanel extends JPanel {
             refreshAll(false);
         }, e -> {
             remoteActions.forEach(a -> a.setEnabled(true));
-            showError(e);
+            vavi.apps.gitup.model.Accounts.Account a = triedAccount;
+            if (a != null && e.getMessage() != null && e.getMessage().contains("authentication failed")) {
+                showError(new IllegalStateException(e.getMessage() + "\n\nThe saved account " + a + " (its Keychain password / token) was tried first."
+                        + "\nUpdate it in Settings ▸ Accounts (⌘,)."));
+            } else {
+                showError(e);
+            }
             refreshAll(false);
         });
     }
@@ -1668,10 +1677,26 @@ public class RepoPanel extends JPanel {
                 try {
                     vavi.apps.gitup.model.Accounts.Account a = vavi.apps.gitup.model.Accounts.get().find(url, user);
                     String secret = a != null ? vavi.apps.gitup.model.Accounts.get().secret(a) : null;
-                    if (secret != null) return new String[] {a.username(), secret};
+                    if (secret != null) {
+                        triedAccount = a;
+                        return new String[] {a.username(), secret};
+                    }
                 } catch (RuntimeException e) {
                     logger.log(System.Logger.Level.WARNING, "account: " + e.getMessage(), e);
                 }
+            }
+            if (org.rococoa.Foundation.isMainThread()) {
+                // GitUpKit asks on the main thread (dispatch_sync): a Swing dialog would dead lock, use AppKit
+                vavi.apps.gitup.model.Accounts.Account rejected = triedAccount;
+                String note = rejected == null ? null
+                        : "The saved password / token of " + rejected + " was rejected by the server (expired or revoked?). "
+                        + "Enter a valid one, \"Remember\" replaces the saved one."
+                        + (rejected.host().contains("github.com") ? " GitHub needs a personal access token with the repo scope." : "");
+                vavi.apps.gitup.objc.NativePrompt.Answer a = vavi.apps.gitup.objc.NativePrompt.userPassword(url,
+                        rejected != null ? rejected.username() : user, true, note);
+                if (a == null) return null;
+                if (a.remember()) rememberAccount(url, a.username(), a.secret());
+                return new String[] {a.username(), a.secret()};
             }
             String[][] result = new String[1][];
             invokeAndWait(() -> {
@@ -1687,22 +1712,14 @@ public class RepoPanel extends JPanel {
                 panel.add(remember);
                 if (JOptionPane.showConfirmDialog(RepoPanel.this, panel, "Authentication", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) == JOptionPane.OK_OPTION) {
                     result[0] = new String[] {u.getText(), new String(p.getPassword())};
-                    String host = vavi.apps.gitup.model.Accounts.host(url);
-                    if (remember.isSelected() && host != null && !u.getText().isBlank()) {
-                        try {
-                            vavi.apps.gitup.model.Accounts.get().put(new vavi.apps.gitup.model.Accounts.Account(
-                                    vavi.apps.gitup.model.Accounts.Service.guess(host), host, u.getText().strip(),
-                                    vavi.apps.gitup.model.Accounts.Protocol.HTTPS), result[0][1]);
-                        } catch (RuntimeException e) {
-                            logger.log(System.Logger.Level.WARNING, "account: " + e.getMessage(), e);
-                        }
-                    }
+                    if (remember.isSelected()) rememberAccount(url, u.getText(), result[0][1]);
                 }
             });
             return result[0];
         }
 
         @Override public String passphrase(String url, String key) {
+            if (org.rococoa.Foundation.isMainThread()) return vavi.apps.gitup.objc.NativePrompt.passphrase(url, key);
             String[] result = new String[1];
             invokeAndWait(() -> {
                 JPasswordField p = new JPasswordField(20);
@@ -1714,6 +1731,18 @@ public class RepoPanel extends JPanel {
                 }
             });
             return result[0];
+        }
+
+        private void rememberAccount(String url, String user, String secret) {
+            String host = vavi.apps.gitup.model.Accounts.host(url);
+            if (host == null || user == null || user.isBlank()) return;
+            try {
+                vavi.apps.gitup.model.Accounts.get().put(new vavi.apps.gitup.model.Accounts.Account(
+                        vavi.apps.gitup.model.Accounts.Service.guess(host), host, user.strip(),
+                        vavi.apps.gitup.model.Accounts.Protocol.HTTPS), secret);
+            } catch (RuntimeException e) {
+                logger.log(System.Logger.Level.WARNING, "account: " + e.getMessage(), e);
+            }
         }
 
         private void invokeAndWait(Runnable r) {

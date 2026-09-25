@@ -240,8 +240,27 @@ public class SettingsWindow extends JFrame {
         if (JOptionPane.showConfirmDialog(this, p, "Import from Maven settings.xml", JOptionPane.OK_CANCEL_OPTION,
                 JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) return;
         if (table.isEditing()) table.getCellEditor().stopCellEditing();
+        // the keychain may already have a password for the same host and user (e.g. from git's credential helper)
+        List<String> existing = new ArrayList<>();
+        for (ImportModel.Row r : model.rows) {
+            if (!r.checked || r.username == null || r.username.isBlank() || r.host == null || r.host.isBlank()) continue;
+            try {
+                if (accounts.hasSecret(r.host.strip(), r.username.strip())) existing.add(r.username.strip() + "@" + r.host.strip());
+            } catch (RuntimeException ignored) {
+            }
+        }
+        boolean replace = false;
+        if (!existing.isEmpty()) {
+            int answer = JOptionPane.showOptionDialog(this, "The Keychain already has a password / token for:\n  " + String.join("\n  ", existing)
+                            + "\n\n(maybe saved by git or another application)\nReplace them with the ones in settings.xml?",
+                    "Import", JOptionPane.YES_NO_CANCEL_OPTION, JOptionPane.QUESTION_MESSAGE, null,
+                    new String[] {"Replace", "Keep the Keychain's", "Cancel"}, "Keep the Keychain's");
+            if (answer == 2 || answer == JOptionPane.CLOSED_OPTION) return;
+            replace = answer == 0;
+        }
         int n = 0;
         List<String> skipped = new ArrayList<>();
+        List<String> kept = new ArrayList<>();
         for (ImportModel.Row r : model.rows) {
             if (!r.checked) continue;
             if (r.username == null || r.username.isBlank() || r.host == null || r.host.isBlank()) {
@@ -249,14 +268,19 @@ public class SettingsWindow extends JFrame {
                 continue;
             }
             try {
-                accounts.put(new Account(r.service, r.host.strip(), r.username.strip(), Protocol.HTTPS), r.server.secret());
+                String key = r.username.strip() + "@" + r.host.strip();
+                boolean keep = existing.contains(key) && !replace;
+                if (keep) kept.add(key);
+                accounts.put(new Account(r.service, r.host.strip(), r.username.strip(), Protocol.HTTPS), keep ? null : r.server.secret());
                 n++;
             } catch (RuntimeException e) {
                 skipped.add(r.server.id() + " (" + e.getMessage() + ")");
             }
         }
         accountModel.reload();
-        JOptionPane.showMessageDialog(this, "Imported " + n + " account(s)." + (skipped.isEmpty() ? "" : "\nSkipped: " + String.join(", ", skipped)),
+        JOptionPane.showMessageDialog(this, "Imported " + n + " account(s)."
+                        + (kept.isEmpty() ? "" : "\nThe Keychain's existing password is used for: " + String.join(", ", kept))
+                        + (skipped.isEmpty() ? "" : "\nSkipped: " + String.join(", ", skipped)),
                 "Import", JOptionPane.INFORMATION_MESSAGE);
     }
 

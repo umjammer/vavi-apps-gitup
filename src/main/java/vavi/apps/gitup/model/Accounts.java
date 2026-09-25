@@ -57,6 +57,10 @@ public final class Accounts {
     /** where secrets go, replaceable in tests */
     public interface SecretStore {
         String find(String host, String user);
+        /** without reading the secret */
+        default boolean exists(String host, String user) { return find(host, user) != null; }
+        /** a secret saved by an older version, read without any dialog, null when none or not readable */
+        default String findLegacy(String host, String user) { return null; }
         void save(String host, String user, String secret);
         void delete(String host, String user);
     }
@@ -64,6 +68,8 @@ public final class Accounts {
     /** the macOS login keychain */
     public static final SecretStore KEYCHAIN = new SecretStore() {
         @Override public String find(String host, String user) { return Keychain.find(host, user); }
+        @Override public boolean exists(String host, String user) { return Keychain.exists(host, user); }
+        @Override public String findLegacy(String host, String user) { return Keychain.findLegacyQuietly(host, user); }
         @Override public void save(String host, String user, String secret) { Keychain.save(host, user, secret); }
         @Override public void delete(String host, String user) { Keychain.delete(host, user); }
     };
@@ -100,10 +106,16 @@ public final class Accounts {
 
     /** adds or replaces (same host and user), the secret is stored when not null */
     public synchronized void put(Account a, String secret) {
+        // the secret first: when the keychain refuses, the account is not added
+        if (secret != null && !secret.isEmpty()) secrets.save(a.host(), a.username(), secret);
         accounts.removeIf(x -> x.host().equalsIgnoreCase(a.host()) && x.username().equals(a.username()));
         accounts.add(a);
-        if (secret != null && !secret.isEmpty()) secrets.save(a.host(), a.username(), secret);
         save();
+    }
+
+    /** @return true when the keychain already has a secret for the host and user (not read) */
+    public boolean hasSecret(String host, String user) {
+        return secrets.exists(host, user);
     }
 
     public synchronized void remove(Account a, boolean deleteSecret) {
@@ -112,8 +124,18 @@ public final class Accounts {
         save();
     }
 
+    /** the secret, an item of an older version is moved to this version's items on the way */
     public String secret(Account a) {
-        return secrets.find(a.host(), a.username());
+        String s = secrets.find(a.host(), a.username());
+        if (s != null) return s;
+        String legacy = secrets.findLegacy(a.host(), a.username());
+        if (legacy != null) {
+            try {
+                secrets.save(a.host(), a.username(), legacy);
+            } catch (RuntimeException ignored) {
+            }
+        }
+        return legacy;
     }
 
     private void save() {

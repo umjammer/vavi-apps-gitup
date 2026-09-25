@@ -78,8 +78,24 @@ public class RemoteOps implements AutoCloseable {
         return new GitException(what + ": " + (error != null ? error.localizedDescription() : "unknown error"));
     }
 
+    /**
+     * the error of a transfer. when credentials were asked, libgit2 1.4 often reports a later
+     * unrelated error (e.g. "config value 'http.followRedirects' was not found"), so say what happened.
+     */
+    private GitException transferError(String what, ObjCObjectByReference e) {
+        GitException ge = error(what, e);
+        if (delegate.authAsked > 0) {
+            String hint = delegate.authUrl != null && delegate.authUrl.contains("github.com")
+                    ? " GitHub does not accept account passwords, use a personal access token as the password." : "";
+            return new GitException(what + ": authentication failed for " + delegate.authUrl + "." + hint
+                    + " (" + ge.getMessage().substring(what.length() + 2) + ")");
+        }
+        return ge;
+    }
+
     /** fetches the default branches of every remote (with prune) */
     public void fetchAll() {
+        delegate.reset();
         NSAutoreleasePool pool = NSAutoreleasePool.new_();
         try {
             ObjCObjectByReference e = new ObjCObjectByReference();
@@ -89,7 +105,7 @@ public class RemoteOps implements AutoCloseable {
                 GCRemote remote = Rococoa.cast(remotes.objectAtIndex(i), GCRemote.class);
                 commandLog.add("git fetch --prune " + vavi.apps.gitup.model.CommandLog.quote(remote.name()), "GitUpKit transport");
                 if (!repo.fetchDefaultRemoteBranchesFromRemote_tagMode_prune_updatedTips_error(remote, 0, true, null, e)) {
-                    throw error("fetch " + remote.name(), e);
+                    throw transferError("fetch " + remote.name(), e);
                 }
             }
         } finally {
@@ -99,6 +115,7 @@ public class RemoteOps implements AutoCloseable {
 
     /** pushes a local branch to its upstream, or to "origin" setting the upstream when there is none */
     public void push(String localBranch, boolean hasUpstream) {
+        delegate.reset();
         NSAutoreleasePool pool = NSAutoreleasePool.new_();
         try {
             ObjCObjectByReference e = new ObjCObjectByReference();
@@ -114,7 +131,7 @@ public class RemoteOps implements AutoCloseable {
                 if (origin == null) throw error("remote origin", e);
                 ok = repo.pushLocalBranch_toRemote_force_setUpstream_error(branch, origin, false, true, e);
             }
-            if (!ok) throw error("push " + localBranch, e);
+            if (!ok) throw transferError("push " + localBranch, e);
         } finally {
             pool.drain();
         }
@@ -122,6 +139,7 @@ public class RemoteOps implements AutoCloseable {
 
     /** deletes a branch on its remote, e.g. "origin/topic" */
     public void deleteRemoteBranch(String remoteBranch) {
+        delegate.reset();
         int slash = remoteBranch.indexOf('/');
         commandLog.add("git push " + vavi.apps.gitup.model.CommandLog.quote(remoteBranch.substring(0, Math.max(slash, 0)))
                 + " --delete " + vavi.apps.gitup.model.CommandLog.quote(remoteBranch.substring(slash + 1)), "GitUpKit transport");
@@ -130,7 +148,7 @@ public class RemoteOps implements AutoCloseable {
             ObjCObjectByReference e = new ObjCObjectByReference();
             GCBranch branch = repo.findRemoteBranchWithName_error(remoteBranch, e);
             if (branch == null) throw error("remote branch " + remoteBranch, e);
-            if (!repo.deleteRemoteBranchFromRemote_error(branch, e)) throw error("delete " + remoteBranch, e);
+            if (!repo.deleteRemoteBranchFromRemote_error(branch, e)) throw transferError("delete " + remoteBranch, e);
         } finally {
             pool.drain();
         }
@@ -146,6 +164,15 @@ public class RemoteOps implements AutoCloseable {
 
         private final Prompter prompter;
         private final Consumer<String> progress;
+
+        /** credentials asked in the current operation (by GitUpKit, on the main thread) */
+        volatile int authAsked;
+        volatile String authUrl;
+
+        void reset() {
+            authAsked = 0;
+            authUrl = null;
+        }
 
         Delegate(Prompter prompter, Consumer<String> progress) {
             this.prompter = prompter;
@@ -179,6 +206,8 @@ public class RemoteOps implements AutoCloseable {
         // NSString** parameters are received as raw addresses
 
         public boolean repository_requiresPlainTextAuthenticationForURL_user_username_password(ID repository, ID url, ID user, long username, long password) {
+            authAsked++;
+            authUrl = str(url);
             String[] up = prompter.userPassword(str(url), str(user));
             if (up == null) return false;
             out(username, up[0]);
@@ -188,6 +217,8 @@ public class RemoteOps implements AutoCloseable {
 
         public boolean repository_requiresSSHAuthenticationForURL_user_username_publicKeyPath_privateKeyPath_passphrase(
                 ID repository, ID url, ID user, long username, long publicKeyPath, long privateKeyPath, long passphrase) {
+            authAsked++;
+            authUrl = str(url);
             Path ssh = Path.of(System.getProperty("user.home"), ".ssh");
             Path key = null;
             for (String name : new String[] {"id_ed25519", "id_ecdsa", "id_rsa"}) {

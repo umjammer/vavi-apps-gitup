@@ -102,6 +102,19 @@ class SettingsTest {
         assertEquals("git.example.com", Accounts.host("ssh://git@git.example.com:22/team/repo.git"));
         assertNull(Accounts.host("/local/path"));
 
+        // an item of an older version (without the domain) is found quietly and moved over
+        Map<String, String> legacy = new HashMap<>(Map.of("gitlab.com/carol", "old-token"));
+        Accounts.SecretStore withLegacy = new Accounts.SecretStore() {
+            @Override public String find(String h, String u) { return store.get(h + "/" + u); }
+            @Override public void save(String h, String u, String s) { store.put(h + "/" + u, s); }
+            @Override public void delete(String h, String u) { store.remove(h + "/" + u); }
+            @Override public String findLegacy(String h, String u) { return legacy.get(h + "/" + u); }
+        };
+        Accounts c = new Accounts(prefs, withLegacy);
+        Account carol = new Account(Service.GITLAB, "gitlab.com", "carol", Protocol.HTTPS);
+        assertEquals("old-token", c.secret(carol));
+        assertEquals("old-token", store.get("gitlab.com/carol"), "migrated");
+
         b.remove(gh, true);
         assertNull(store.get("github.com/alice"));
         assertEquals(Service.GITLAB, Service.guess("gitlab-maven"));
@@ -153,7 +166,9 @@ class SettingsTest {
         String host = "vavi-apps-gitup-test.invalid";
         try {
             assertNull(Keychain.find(host, "tester"));
+            assertFalse(Keychain.exists(host, "tester"));
             Keychain.save(host, "tester", "s3cret");
+            assertTrue(Keychain.exists(host, "tester"));
             assertEquals("s3cret", Keychain.find(host, "tester"));
             Keychain.save(host, "tester", "changed");
             assertEquals("changed", Keychain.find(host, "tester"));

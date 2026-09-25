@@ -84,3 +84,4 @@ without a repository the last session's tabs are restored, or the repository bro
 ## TODO
 
  * conflict resolution while rewriting history (GitUp's resolver)
+ * log part: add "edit author" if possible

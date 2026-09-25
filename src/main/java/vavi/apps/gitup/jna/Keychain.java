@@ -16,8 +16,11 @@ import com.sun.jna.ptr.PointerByReference;
 
 
 /**
- * internet passwords in the login keychain (the kind git's osxkeychain credential helper uses:
- * server, account, protocol https), so an account saved here also works for the git command.
+ * internet passwords in the login keychain (server, account, protocol https).
+ * <p>
+ * the application's items have their own security domain: a query without it also matches items
+ * of other applications (e.g. git's osxkeychain credential helper) for the same server and account,
+ * reading those makes macOS ask "java wants to use your confidential information" every time.
  *
  * @author <a href="mailto:umjammer@gmail.com">Naohide Sano</a> (nsano)
  * @version 0.00 2026-09-26 nsano initial version <br>
@@ -44,6 +47,10 @@ public final class Keychain {
         int SecKeychainItemFreeContent(Pointer attrList, Pointer data);
 
         int SecKeychainItemDelete(Pointer itemRef);
+
+        int SecKeychainSetUserInteractionAllowed(boolean state);
+
+        int SecKeychainGetUserInteractionAllowed(com.sun.jna.ptr.ByteByReference state);
     }
 
     interface CoreFoundation extends Library {
@@ -59,16 +66,38 @@ public final class Keychain {
     private static final int ERR_NOT_FOUND = -25300;
     private static final int ERR_DUPLICATE = -25299;
 
+    /** the security domain of this application's items */
+    public static final String DOMAIN = "vavi-apps-gitup";
+
     private static byte[] b(String s) {
         return s.getBytes(StandardCharsets.UTF_8);
     }
 
-    /** @return the password, null when there is none */
+    /** @return the password of this application's item, null when there is none */
     public static String find(String server, String account) {
-        byte[] s = b(server), a = b(account);
+        return find(server, account, DOMAIN);
+    }
+
+    /**
+     * reads an item saved without the domain (by an older version of this application, or another one)
+     * without any keychain dialog: an item this application may not read gives null.
+     */
+    public static String findLegacyQuietly(String server, String account) {
+        Security.INSTANCE.SecKeychainSetUserInteractionAllowed(false);
+        try {
+            return find(server, account, null);
+        } catch (IllegalStateException e) {
+            return null; // interaction not allowed, authorization failed...
+        } finally {
+            Security.INSTANCE.SecKeychainSetUserInteractionAllowed(true);
+        }
+    }
+
+    private static String find(String server, String account, String domain) {
+        byte[] s = b(server), a = b(account), d = domain != null ? b(domain) : null;
         IntByReference len = new IntByReference();
         PointerByReference data = new PointerByReference();
-        int rc = Security.INSTANCE.SecKeychainFindInternetPassword(null, s.length, s, 0, null, a.length, a, 0, null,
+        int rc = Security.INSTANCE.SecKeychainFindInternetPassword(null, s.length, s, d != null ? d.length : 0, d, a.length, a, 0, null,
                 (short) 0, PROTOCOL_HTTPS, AUTH_DEFAULT, len, data, null);
         if (rc == ERR_NOT_FOUND) return null;
         if (rc != 0) throw new IllegalStateException("keychain: " + rc);
@@ -79,14 +108,26 @@ public final class Keychain {
         }
     }
 
+    /** @return true when an item exists (the secret is not read, no access prompt) */
+    public static boolean exists(String server, String account) {
+        byte[] s = b(server), a = b(account), d = b(DOMAIN);
+        PointerByReference item = new PointerByReference();
+        int rc = Security.INSTANCE.SecKeychainFindInternetPassword(null, s.length, s, d.length, d, a.length, a, 0, null,
+                (short) 0, PROTOCOL_HTTPS, AUTH_DEFAULT, null, null, item);
+        if (rc == ERR_NOT_FOUND) return false;
+        if (rc != 0) throw new IllegalStateException("keychain: " + rc);
+        CoreFoundation.INSTANCE.CFRelease(item.getValue());
+        return true;
+    }
+
     /** adds or updates */
     public static void save(String server, String account, String password) {
-        byte[] s = b(server), a = b(account), p = b(password);
-        int rc = Security.INSTANCE.SecKeychainAddInternetPassword(null, s.length, s, 0, null, a.length, a, 0, null,
+        byte[] s = b(server), a = b(account), p = b(password), d = b(DOMAIN);
+        int rc = Security.INSTANCE.SecKeychainAddInternetPassword(null, s.length, s, d.length, d, a.length, a, 0, null,
                 (short) 0, PROTOCOL_HTTPS, AUTH_DEFAULT, p.length, p, null);
         if (rc == ERR_DUPLICATE) {
             PointerByReference item = new PointerByReference();
-            rc = Security.INSTANCE.SecKeychainFindInternetPassword(null, s.length, s, 0, null, a.length, a, 0, null,
+            rc = Security.INSTANCE.SecKeychainFindInternetPassword(null, s.length, s, d.length, d, a.length, a, 0, null,
                     (short) 0, PROTOCOL_HTTPS, AUTH_DEFAULT, null, null, item);
             if (rc == 0) {
                 try {
@@ -101,9 +142,9 @@ public final class Keychain {
 
     /** @return false when there was nothing */
     public static boolean delete(String server, String account) {
-        byte[] s = b(server), a = b(account);
+        byte[] s = b(server), a = b(account), d = b(DOMAIN);
         PointerByReference item = new PointerByReference();
-        int rc = Security.INSTANCE.SecKeychainFindInternetPassword(null, s.length, s, 0, null, a.length, a, 0, null,
+        int rc = Security.INSTANCE.SecKeychainFindInternetPassword(null, s.length, s, d.length, d, a.length, a, 0, null,
                 (short) 0, PROTOCOL_HTTPS, AUTH_DEFAULT, null, null, item);
         if (rc == ERR_NOT_FOUND) return false;
         if (rc != 0) throw new IllegalStateException("keychain: " + rc);

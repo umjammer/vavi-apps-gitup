@@ -54,6 +54,35 @@ class RemoteOpsTest {
         @Override public String passphrase(String url, String key) { return null; }
     };
 
+    /**
+     * GitUpKit asks for credentials on the main thread (dispatch_sync to the main queue): a prompt must not
+     * wait for the EDT there. needs the network, run with -Dvavi.test.network=true
+     */
+    @Test
+    @org.junit.jupiter.api.condition.EnabledIfSystemProperty(named = "vavi.test.network", matches = "true")
+    void credentialsAskedOnMainThread() throws Exception {
+        Path a = dir.resolve("a");
+        Files.createDirectories(a);
+        sh(a, "init", "-q", "-b", "main");
+        Files.writeString(a.resolve("f.txt"), "1\n");
+        sh(a, "add", "f.txt");
+        sh(a, "commit", "-q", "-m", "one");
+        sh(a, "remote", "add", "origin", "https://github.com/umjammer/vavi-apps-gitup-no-such-repository-for-test.git");
+        java.util.List<Boolean> onMain = new java.util.concurrent.CopyOnWriteArrayList<>();
+        RemoteOps.Prompter cancel = new RemoteOps.Prompter() {
+            @Override public String[] userPassword(String url, String user) {
+                onMain.add(org.rococoa.Foundation.isMainThread());
+                return null; // cancel
+            }
+            @Override public String passphrase(String url, String key) { return null; }
+        };
+        try (RemoteOps ops = new RemoteOps(a, cancel, System.err::println)) {
+            org.junit.jupiter.api.Assertions.assertThrows(vavi.apps.gitup.model.GitException.class, () -> ops.push("main", false));
+        }
+        assertTrue(!onMain.isEmpty(), "credentials were asked");
+        assertTrue(onMain.stream().allMatch(b -> b), "on the main thread: " + onMain);
+    }
+
     @Test
     void pushFetchPull() throws Exception {
         Path bare = dir.resolve("remote.git");
