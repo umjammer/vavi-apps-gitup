@@ -438,7 +438,7 @@ public class LogPanel extends JPanel {
     }
 
     /** paints lanes, edges and the commit node */
-    private static class GraphRenderer extends JComponent implements TableCellRenderer {
+    static class GraphRenderer extends JComponent implements TableCellRenderer {
         private CommitRow row;
         private boolean selected;
         private Color background;
@@ -449,6 +449,26 @@ public class LogPanel extends JPanel {
             selected = sel;
             background = sel ? t.getSelectionBackground() : t.getBackground();
             return this;
+        }
+
+        /**
+         * the lines from the commit down to its parents: {lane, 1 when it joins a lane already
+         * passing through (a short stub), 0 when it goes down to the next row}.
+         * a parent the commit's own lane goes on to is not joined to another lane too:
+         * the first commit of a branch would have two lines to its parent (the fork point).
+         */
+        static List<int[]> edges(CommitRow row) {
+            String[] before = row.before(), after = row.after();
+            int lane = row.lane();
+            String own = lane < after.length ? after[lane] : null;
+            List<int[]> edges = new ArrayList<>();
+            for (int j = 0; j < after.length; j++) {
+                if (after[j] == null || !row.parents().contains(after[j])) continue;
+                boolean passthrough = j < before.length && after[j].equals(before[j]) && j != lane;
+                if (passthrough && after[j].equals(own)) continue;
+                edges.add(new int[] {j, passthrough ? 1 : 0});
+            }
+            return edges;
         }
 
         private static int x(int lane) {
@@ -484,12 +504,11 @@ public class LogPanel extends JPanel {
                     g.drawLine(x(i), 0, x(i), h);
                 }
             }
-            for (int j = 0; j < after.length; j++) {
-                if (after[j] != null && row.parents().contains(after[j])) {
-                    boolean passthrough = j < before.length && after[j].equals(before[j]) && j != lane;
-                    g.setColor(color(passthrough ? lane : j));
-                    g.drawLine(x(lane), mid, x(j), passthrough ? mid + h / 4 : h);
-                }
+            for (int[] e : edges(row)) {
+                int j = e[0];
+                boolean passthrough = e[1] == 1;
+                g.setColor(color(passthrough ? lane : j));
+                g.drawLine(x(lane), mid, x(j), passthrough ? mid + h / 4 : h);
             }
             g.setColor(color(lane));
             g.fillOval(x(lane) - 4, mid - 4, 8, 8);
