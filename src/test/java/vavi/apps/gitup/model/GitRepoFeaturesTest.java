@@ -141,6 +141,99 @@ class GitRepoFeaturesTest {
     }
 
     @Test
+    void resolveTheirs() throws Exception {
+        Path b = setupClone();
+        pushFromA(3, "THREE-A");
+        commitInB(b, 3, "THREE-B");
+        sh(b, "fetch", "-q");
+        try (GitRepo repo = new GitRepo(b)) {
+            assertEquals(PullResult.CONFLICTS, repo.pullFromUpstream());
+            repo.resolveConflict("f.txt", false);
+            assertTrue(repo.status().unstaged().stream().noneMatch(f -> f.kind() == FileChange.Kind.CONFLICTED));
+        }
+        assertEquals("1\n2\nTHREE-A\n4\n5\n", Files.readString(b.resolve("f.txt")));
+        assertEquals("M  f.txt\n", sh(b, "status", "--porcelain"));
+    }
+
+    @Test
+    void resolveOurs() throws Exception {
+        Path b = setupClone();
+        pushFromA(3, "THREE-A");
+        commitInB(b, 3, "THREE-B");
+        sh(b, "fetch", "-q");
+        try (GitRepo repo = new GitRepo(b)) {
+            assertEquals(PullResult.CONFLICTS, repo.pullFromUpstream());
+            repo.resolveConflict("f.txt", true);
+            repo.commit("merged, ours\n");
+        }
+        assertEquals("1\n2\nTHREE-B\n4\n5\n", Files.readString(b.resolve("f.txt")));
+        assertEquals("", sh(b, "status", "--porcelain"));
+    }
+
+    @Test
+    void pullRebase() throws Exception {
+        Path b = setupClone();
+        pushFromA(1, "one");
+        commitInB(b, 5, "five");
+        sh(b, "fetch", "-q");
+        try (GitRepo repo = new GitRepo(b)) {
+            assertFalse(repo.isPullRebaseConfigured());
+            sh(b, "config", "pull.rebase", "true");
+            assertTrue(repo.isPullRebaseConfigured());
+            assertEquals(PullResult.REBASED, repo.pullFromUpstream(true));
+        }
+        assertEquals("b: five\na: one\none", sh(b, "log", "--format=%s").strip(), "linear, no merge commit");
+        assertEquals("one\n2\n3\n4\nfive\n", Files.readString(b.resolve("f.txt")));
+        assertEquals("", sh(b, "status", "--porcelain"));
+        assertEquals("main", sh(b, "rev-parse", "--abbrev-ref", "HEAD").strip());
+    }
+
+    @Test
+    void pullRebaseConflictAborts() throws Exception {
+        Path b = setupClone();
+        pushFromA(3, "THREE-A");
+        commitInB(b, 3, "THREE-B");
+        sh(b, "fetch", "-q");
+        String before = sh(b, "rev-parse", "HEAD");
+        try (GitRepo repo = new GitRepo(b)) {
+            GitException e = org.junit.jupiter.api.Assertions.assertThrows(GitException.class, () -> repo.pullFromUpstream(true));
+            assertTrue(e.getMessage().contains("f.txt"), e.getMessage());
+            assertEquals(GitRepo.State.NONE, repo.state());
+        }
+        assertEquals(before, sh(b, "rev-parse", "HEAD"));
+        assertEquals("", sh(b, "status", "--porcelain"));
+    }
+
+    @Test
+    void pullRebaseRefusesDirty() throws Exception {
+        Path b = setupClone();
+        pushFromA(1, "one");
+        commitInB(b, 5, "five");
+        sh(b, "fetch", "-q");
+        Files.writeString(b.resolve("f.txt"), "dirty\n");
+        try (GitRepo repo = new GitRepo(b)) {
+            GitException e = org.junit.jupiter.api.Assertions.assertThrows(GitException.class, () -> repo.pullFromUpstream(true));
+            assertTrue(e.getMessage().contains("stash"), e.getMessage());
+        }
+        assertEquals("dirty\n", Files.readString(b.resolve("f.txt")));
+    }
+
+    @Test
+    void publishedAndCommitRow() throws Exception {
+        Path b = setupClone();
+        commitInB(b, 2, "two");
+        try (GitRepo repo = new GitRepo(b)) {
+            String head = repo.headOid();
+            String first = repo.revparse("HEAD~1");
+            assertFalse(repo.isPublished(head));
+            assertTrue(repo.isPublished(first));
+            CommitRow r = repo.commitRow(head);
+            assertEquals("b: two", r.summary());
+            assertEquals(List.of(first), r.parents());
+        }
+    }
+
+    @Test
     void pullUpToDate() throws Exception {
         Path b = setupClone();
         try (GitRepo repo = new GitRepo(b)) {

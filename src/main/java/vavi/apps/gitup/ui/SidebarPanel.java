@@ -40,6 +40,8 @@ public class SidebarPanel extends JPanel {
         void reveal(Ref ref);
         void stashApply(Stash stash, boolean drop);
         void stashDrop(Stash stash);
+        /** shows the stash's changes */
+        void showStash(Stash stash);
     }
 
     private final DefaultMutableTreeNode root = new DefaultMutableTreeNode("repository");
@@ -66,8 +68,9 @@ public class SidebarPanel extends JPanel {
             @Override public void mousePressed(MouseEvent e) {
                 if (e.isPopupTrigger()) { popup(e); return; }
                 Stash stash = stashAt(e);
-                if (stash != null && e.getClickCount() == 2 && listener != null) {
-                    listener.stashApply(stash, false);
+                if (stash != null && listener != null) {
+                    if (e.getClickCount() == 2) listener.stashApply(stash, false);
+                    else listener.showStash(stash);
                     return;
                 }
                 Ref ref = refAt(e);

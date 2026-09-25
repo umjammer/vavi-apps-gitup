@@ -42,6 +42,8 @@ public class MainWindow extends JFrame {
         void showBrowser();
         /** the set of open tabs changed */
         void tabsChanged(List<Path> paths, int selected);
+        /** recent commit messages */
+        vavi.apps.gitup.model.MessageHistory messageHistory();
     }
 
     private final JTabbedPane tabs = new JTabbedPane();
@@ -168,6 +170,9 @@ public class MainWindow extends JFrame {
                 tabs.setTitleAt(i, p.getRepositoryName());
                 tabs.setToolTipTextAt(i, p.getTitle() + " — " + (p.getWorkdir() != null ? p.getWorkdir() : p.getPath()));
                 if (p == selected()) setTitle(p.getTitle());
+            }
+            @Override public vavi.apps.gitup.model.MessageHistory messageHistory() {
+                return app.messageHistory();
             }
             @Override public void failed(RepoPanel p) {
                 int i = tabs.indexOfComponent(p);

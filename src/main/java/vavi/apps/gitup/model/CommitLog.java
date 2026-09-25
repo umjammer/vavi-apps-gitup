@@ -15,7 +15,6 @@ import com.sun.jna.ptr.PointerByReference;
 
 import vavi.apps.gitup.jna.LibGit2;
 import vavi.apps.gitup.jna.Structs.GitOid;
-import vavi.apps.gitup.jna.Structs.GitSignature;
 
 import static vavi.apps.gitup.jna.LibGit2.GIT_SORT_TIME;
 import static vavi.apps.gitup.jna.LibGit2.GIT_SORT_TOPOLOGICAL;
@@ -90,21 +89,10 @@ public final class CommitLog implements AutoCloseable {
     }
 
     private CommitRow read(String hex) {
-        Pointer c = repo.lookupCommit(hex);
-        try {
-            int pc = git.git_commit_parentcount(c);
-            List<String> parents = new ArrayList<>(pc);
-            for (int i = 0; i < pc; i++) parents.add(git.git_oid_tostr_s(git.git_commit_parent_id(c, i)));
-            GitSignature sig = new GitSignature(git.git_commit_author(c));
-            String summary = git.git_commit_summary(c);
-            String message = git.git_commit_message(c);
-            GraphLayout.Step step = layout.add(hex, parents);
-            return new CommitRow(hex, parents, summary != null ? summary : "", message != null ? message : "",
-                    sig.name, sig.email, Instant.ofEpochSecond(sig.when.time),
-                    step.lane(), step.before(), step.after());
-        } finally {
-            git.git_commit_free(c);
-        }
+        CommitRow c = repo.commitRow(hex);
+        GraphLayout.Step step = layout.add(hex, c.parents());
+        return new CommitRow(hex, c.parents(), c.summary(), c.message(), c.author(), c.email(), c.time(),
+                step.lane(), step.before(), step.after());
     }
 
     @Override

@@ -626,13 +626,33 @@ public class GitRepo implements AutoCloseable {
     }
 
     /** result of {@link #pullFromUpstream()} */
-    public enum PullResult { UP_TO_DATE, FAST_FORWARD, MERGED, CONFLICTS }
+    public enum PullResult { UP_TO_DATE, FAST_FORWARD, MERGED, CONFLICTS, REBASED }
+
+    /** @return true when branch.&lt;name&gt;.rebase or pull.rebase is set */
+    public boolean isPullRebaseConfigured() {
+        String branch = headBranch();
+        PointerByReference cp = new PointerByReference();
+        check(git.git_repository_config_snapshot(cp, handle()), "config");
+        try {
+            IntByReference v = new IntByReference();
+            if (branch != null && git.git_config_get_bool(v, cp.getValue(), "branch." + branch + ".rebase") == 0) return v.getValue() != 0;
+            return git.git_config_get_bool(v, cp.getValue(), "pull.rebase") == 0 && v.getValue() != 0;
+        } finally {
+            git.git_config_free(cp.getValue());
+        }
+    }
+
+    /** {@link #pullFromUpstream(boolean)} with a merge */
+    public PullResult pullFromUpstream() {
+        return pullFromUpstream(false);
+    }
 
     /**
      * integrates the fetched upstream into the current branch: fast-forward when possible,
-     * otherwise a merge commit. on conflicts the repository is left merging.
+     * otherwise a merge commit (on conflicts the repository is left merging) or a rebase
+     * (on conflicts the rebase is aborted and an exception is thrown).
      */
-    public PullResult pullFromUpstream() {
+    public PullResult pullFromUpstream(boolean rebase) {
         String branch = headBranch();
         if (branch == null || "HEAD".equals(branch)) throw new GitException("not on a branch");
         String upstream = upstream(branch);
@@ -653,6 +673,10 @@ public class GitRepo implements AutoCloseable {
                 fastForward(branch, target, t);
                 return PullResult.FAST_FORWARD;
             }
+            if (rebase) {
+                rebase(heads[0], upstream);
+                return PullResult.REBASED;
+            }
             Pointer opts = LibGit2.safeCheckoutOptions();
             opts.setInt(4, GIT_CHECKOUT_SAFE | GIT_CHECKOUT_ALLOW_CONFLICTS);
             check(git.git_merge(handle(), heads, new NativeLong(1), null, opts), "merge");
@@ -668,6 +692,46 @@ public class GitRepo implements AutoCloseable {
         }
         commit("Merge remote-tracking branch '" + upstream + "' into " + branch + "\n");
         return PullResult.MERGED;
+    }
+
+    /** rebases HEAD onto the annotated upstream, aborts on conflicts */
+    private void rebase(Pointer upstream, String upstreamName) {
+        Status st = status();
+        if (!st.staged().isEmpty() || st.unstaged().stream().anyMatch(f -> f.kind() != FileChange.Kind.UNTRACKED)) {
+            throw new GitException("commit or stash the local changes before rebasing");
+        }
+        PointerByReference rp = new PointerByReference();
+        check(git.git_rebase_init(rp, handle(), null, upstream, null, null), "rebase");
+        Pointer rebase = rp.getValue();
+        Pointer sig = null;
+        try {
+            sig = signature();
+            PointerByReference op = new PointerByReference();
+            int rc;
+            while ((rc = git.git_rebase_next(op, rebase)) == 0) {
+                List<String> conflicts = status().unstaged().stream()
+                        .filter(f -> f.kind() == FileChange.Kind.CONFLICTED).map(FileChange::path).toList();
+                if (!conflicts.isEmpty()) {
+                    git.git_rebase_abort(rebase);
+                    throw new GitException("rebase onto " + upstreamName + " stopped by conflicts in " + String.join(", ", conflicts)
+                            + ", the rebase was aborted. pull with merge to resolve them.");
+                }
+                int c = git.git_rebase_commit(new GitOid(), rebase, null, sig, null, null);
+                if (c == GIT_EAPPLIED) continue; // already upstream
+                if (c < 0) {
+                    git.git_rebase_abort(rebase);
+                    check(c, "rebase commit");
+                }
+            }
+            if (rc != GIT_ITEROVER) {
+                git.git_rebase_abort(rebase);
+                check(rc, "rebase");
+            }
+            check(git.git_rebase_finish(rebase, sig), "finish rebase");
+        } finally {
+            if (sig != null) git.git_signature_free(sig);
+            git.git_rebase_free(rebase);
+        }
     }
 
     private void fastForward(String branch, String target, GitOid t) {
@@ -686,6 +750,77 @@ public class GitRepo implements AutoCloseable {
             git.git_reference_free(np.getValue());
         } finally {
             git.git_reference_free(rp.getValue());
+        }
+    }
+
+    // conflicts
+
+    /** offset of the git_oid in git_index_entry (ctime 8, mtime 8, dev ino mode uid gid file_size 24) */
+    private static final int INDEX_ENTRY_ID = 40;
+
+    /** resolves a conflicted file with our (HEAD) or their version, a missing side deletes the file */
+    public void resolveConflict(String path, boolean ours) {
+        Pointer index = index();
+        try {
+            PointerByReference a = new PointerByReference(), o = new PointerByReference(), t = new PointerByReference();
+            check(git.git_index_conflict_get(a, o, t, index, path), "conflict " + path);
+            Pointer entry = ours ? o.getValue() : t.getValue();
+            Path file = workdir.resolve(path);
+            if (entry == null) {
+                Files.deleteIfExists(file);
+                check(git.git_index_remove_bypath(index, path), "remove " + path);
+            } else {
+                GitOid id = new GitOid(entry.share(INDEX_ENTRY_ID));
+                PointerByReference bp = new PointerByReference();
+                check(git.git_blob_lookup(bp, handle(), id), "blob");
+                try {
+                    long size = git.git_blob_rawsize(bp.getValue());
+                    byte[] content = size == 0 ? new byte[0] : git.git_blob_rawcontent(bp.getValue()).getByteArray(0, (int) size);
+                    Files.createDirectories(file.getParent());
+                    Files.write(file, content);
+                } finally {
+                    git.git_blob_free(bp.getValue());
+                }
+                check(git.git_index_add_bypath(index, path), "add " + path);
+            }
+            check(git.git_index_write(index), "write index");
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        } finally {
+            git.git_index_free(index);
+        }
+    }
+
+    // commits
+
+    /** @return true when a remote branch contains the commit (rewriting it rewrites published history) */
+    public boolean isPublished(String oid) {
+        GitOid c = new GitOid();
+        git.git_oid_fromstr(c, oid);
+        for (Ref r : refs()) {
+            if (r.kind() != Ref.Kind.REMOTE || r.target() == null) continue;
+            if (r.target().equals(oid)) return true;
+            GitOid t = new GitOid();
+            git.git_oid_fromstr(t, r.target());
+            if (git.git_graph_descendant_of(handle(), t, c) == 1) return true;
+        }
+        return false;
+    }
+
+    /** reads one commit (without graph lanes) */
+    public CommitLog.CommitRow commitRow(String oid) {
+        Pointer c = lookupCommit(oid);
+        try {
+            int pc = git.git_commit_parentcount(c);
+            List<String> parents = new ArrayList<>(pc);
+            for (int i = 0; i < pc; i++) parents.add(git.git_oid_tostr_s(git.git_commit_parent_id(c, i)));
+            vavi.apps.gitup.jna.Structs.GitSignature sig = new vavi.apps.gitup.jna.Structs.GitSignature(git.git_commit_author(c));
+            String summary = git.git_commit_summary(c);
+            String message = git.git_commit_message(c);
+            return new CommitLog.CommitRow(oid, parents, summary != null ? summary : "", message != null ? message : "",
+                    sig.name, sig.email, java.time.Instant.ofEpochSecond(sig.when.time), 0, new String[0], new String[0]);
+        } finally {
+            git.git_commit_free(c);
         }
     }
 

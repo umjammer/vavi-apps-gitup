@@ -61,6 +61,8 @@ public class FileTable extends JTable {
         void ignore(List<FileChange> files);
         /** moves the working copy files to the trash */
         void trash(List<FileChange> files);
+        /** resolves conflicted files with our or their version */
+        void resolve(List<FileChange> files, boolean ours);
     }
 
     /** the "Files" table of a commit has no checkbox and no actions */
@@ -167,6 +169,15 @@ public class FileTable extends JTable {
         List<FileChange> files = selectedFiles();
         if (files.isEmpty()) return;
         JPopupMenu menu = new JPopupMenu();
+        boolean existing = workdir != null && files.stream().anyMatch(f -> java.nio.file.Files.exists(workdir.resolve(f.path())));
+        item(menu, "Open", () -> open(files)).setEnabled(existing);
+        menu.addSeparator();
+        List<FileChange> conflicted = files.stream().filter(f -> f.kind() == FileChange.Kind.CONFLICTED).toList();
+        if (checkable && listener != null && !conflicted.isEmpty()) {
+            item(menu, "Resolve Using Mine", () -> listener.resolve(conflicted, true));
+            item(menu, "Resolve Using Theirs", () -> listener.resolve(conflicted, false));
+            menu.addSeparator();
+        }
         if (checkable && listener != null) {
             item(menu, staged ? "Unstage" : "Stage", () -> fireMove(files));
             if (!staged) item(menu, "Discard Changes…", () -> listener.discard(files));
@@ -174,8 +185,7 @@ public class FileTable extends JTable {
             boolean tracked = files.stream().anyMatch(f -> f.kind() != FileChange.Kind.UNTRACKED && f.kind() != FileChange.Kind.ADDED);
             item(menu, "Stop Tracking", () -> listener.stopTracking(files)).setEnabled(tracked);
             item(menu, "Ignore…", () -> listener.ignore(files));
-            boolean exists = workdir != null && files.stream().anyMatch(f -> java.nio.file.Files.exists(workdir.resolve(f.path())));
-            item(menu, "Move to Trash…", () -> listener.trash(files)).setEnabled(exists);
+            item(menu, "Move to Trash…", () -> listener.trash(files)).setEnabled(existing);
             menu.addSeparator();
         }
         item(menu, "Copy Path", () -> copy(files, false));
@@ -190,6 +200,19 @@ public class FileTable extends JTable {
             });
         }
         menu.show(this, e.getX(), e.getY());
+    }
+
+    /** opens the working copy files with their default applications */
+    private void open(List<FileChange> files) {
+        for (FileChange f : files) {
+            java.io.File file = workdir.resolve(f.path()).toFile();
+            if (!file.exists()) continue;
+            try {
+                java.awt.Desktop.getDesktop().open(file);
+            } catch (Exception e) {
+                javax.swing.JOptionPane.showMessageDialog(this, "Cannot open " + f.path() + ": " + e.getMessage(), "Open", javax.swing.JOptionPane.ERROR_MESSAGE);
+            }
+        }
     }
 
     private static JMenuItem item(JPopupMenu menu, String label, Runnable r) {

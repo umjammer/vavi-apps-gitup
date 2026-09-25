@@ -250,6 +250,26 @@ public interface LibGit2 extends Library {
     int git_repository_state_cleanup(Pointer repo);
     int git_reset(Pointer repo, Pointer target, int resetType, Pointer checkoutOpts);
 
+    // rebase
+
+    int GIT_EAPPLIED = -18;
+
+    int git_rebase_init(PointerByReference out, Pointer repo, Pointer branch, Pointer upstream, Pointer onto, Pointer opts);
+    int git_rebase_next(PointerByReference operation, Pointer rebase);
+    int git_rebase_commit(GitOid id, Pointer rebase, Pointer author, Pointer committer, String encoding, String message);
+    int git_rebase_finish(Pointer rebase, Pointer signature);
+    int git_rebase_abort(Pointer rebase);
+    void git_rebase_free(Pointer rebase);
+
+    // conflicts / blobs
+
+    /** out parameters are const git_index_entry* */
+    int git_index_conflict_get(PointerByReference ancestor, PointerByReference ours, PointerByReference theirs, Pointer index, String path);
+    int git_blob_lookup(PointerByReference out, Pointer repo, GitOid id);
+    Pointer git_blob_rawcontent(Pointer blob);
+    long git_blob_rawsize(Pointer blob);
+    void git_blob_free(Pointer blob);
+
     // stash
 
     int GIT_STASH_KEEP_INDEX = 1 << 0;
@@ -269,6 +289,7 @@ public interface LibGit2 extends Library {
 
     int git_repository_config_snapshot(PointerByReference out, Pointer repo);
     int git_config_get_string(PointerByReference out, Pointer cfg, String name);
+    int git_config_get_bool(IntByReference out, Pointer cfg, String name);
     void git_config_free(Pointer cfg);
     int git_ignore_path_is_ignored(IntByReference ignored, Pointer repo, String path);
 

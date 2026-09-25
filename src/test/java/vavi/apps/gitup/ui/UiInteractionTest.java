@@ -159,6 +159,7 @@ class UiInteractionTest {
                 @Override public void stopTracking(List<FileChange> files) {}
                 @Override public void ignore(List<FileChange> files) {}
                 @Override public void trash(List<FileChange> files) {}
+                @Override public void resolve(List<FileChange> files, boolean ours) {}
             };
             staged.setListener(l);
             unstaged.setListener(l);

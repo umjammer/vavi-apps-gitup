@@ -26,6 +26,7 @@ import com.formdev.flatlaf.themes.FlatMacLightLaf;
 import vavi.apps.gitup.jna.GitUpKitLocator;
 import vavi.apps.gitup.jna.LibGit2;
 import vavi.apps.gitup.model.Bookmarks;
+import vavi.apps.gitup.model.MessageHistory;
 import vavi.apps.gitup.ui.MainWindow;
 import vavi.apps.gitup.ui.RepositoryBrowser;
 
@@ -42,6 +43,7 @@ import vavi.apps.gitup.ui.RepositoryBrowser;
  * <li>{@code gitup.framework} ... GitUp.app / GitUpKit.framework location</li>
  * <li>{@code gitup.theme} ... "light" (default) or "dark"</li>
  * <li>{@code gitup.bookmarks} ... bookmarks file (default ~/Library/Application Support/vavi-apps-gitup/bookmarks.txt)</li>
+ * <li>{@code gitup.messageHistory} ... number of commit messages remembered (default 50)</li>
  * </ul>
  *
  * @author <a href="mailto:umjammer@gmail.com">Naohide Sano</a> (nsano)
@@ -57,6 +59,7 @@ public class Main implements MainWindow.App {
     private final Path bookmarksFile = System.getProperty("gitup.bookmarks") != null
             ? Path.of(System.getProperty("gitup.bookmarks")) : Bookmarks.defaultFile();
     private final Bookmarks bookmarks = Bookmarks.load(bookmarksFile);
+    private final MessageHistory messageHistory = new MessageHistory(MessageHistory.defaultFile(), MessageHistory.configuredSize());
     private MainWindow window;
     private RepositoryBrowser browser;
 
@@ -144,6 +147,11 @@ public class Main implements MainWindow.App {
     public void tabsChanged(List<Path> paths, int selected) {
         prefs.put(OPEN_TABS, String.join("\n", paths.stream().map(Path::toString).toList()));
         prefs.putInt(SELECTED_TAB, Math.max(selected, 0));
+    }
+
+    @Override
+    public MessageHistory messageHistory() {
+        return messageHistory;
     }
 
     /** quits when neither the main window nor the browser is shown */

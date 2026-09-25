@@ -48,6 +48,7 @@ public class StagingPanel extends JPanel {
     final JButton stageAllButton = new JButton("Stage All");
     final JButton unstageAllButton = new JButton("Unstage All");
     final JCheckBox amendBox = new JCheckBox("Amend last commit");
+    final JButton historyButton = new JButton("History ▾");
     final JButton abortMergeButton = new JButton("Abort Merge");
     private final JPanel mergeBanner = new JPanel(new BorderLayout(6, 0));
 
@@ -83,7 +84,12 @@ public class StagingPanel extends JPanel {
         JPanel buttons = new JPanel(new BorderLayout());
         commitButton.setToolTipText("Commit staged files (⌘↩)");
         amendBox.setToolTipText("Replace the last commit with the staged files and this message");
-        buttons.add(amendBox, BorderLayout.WEST);
+        historyButton.setToolTipText("Reuse a recent commit message");
+        historyButton.putClientProperty("JButton.buttonType", "borderless");
+        JPanel left = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 0, 0));
+        left.add(amendBox);
+        left.add(historyButton);
+        buttons.add(left, BorderLayout.WEST);
         buttons.add(commitButton, BorderLayout.EAST);
         commitBox.add(buttons, BorderLayout.SOUTH);
 

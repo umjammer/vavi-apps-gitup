@@ -61,6 +61,8 @@ public class LogPanel extends JPanel {
         void selected(CommitRow commit);
         void loadMore();
         void createBranch(CommitRow commit);
+        /** GitUp's "Edit Message": rewrites the commit and its descendants */
+        void editMessage(CommitRow commit);
     }
 
     private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault());
@@ -222,6 +224,7 @@ public class LogPanel extends JPanel {
         item(menu, "Copy Author", () -> copy(c.author() + " <" + c.email() + ">"));
         item(menu, "Copy Row", () -> copy(String.join("\t", c.shortOid(), c.summary(), DATE.format(c.time()), c.author())));
         menu.addSeparator();
+        item(menu, "Edit Message…", () -> { if (listener != null) listener.editMessage(c); });
         item(menu, "New Branch Here…", () -> { if (listener != null) listener.createBranch(c); });
         menu.show(table, e.getX(), e.getY());
     }

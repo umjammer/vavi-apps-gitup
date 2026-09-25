@@ -16,10 +16,13 @@ SourceTree-like git GUI (Swing) using [GitUp](https://gitup.co)'s `GitUpKit.fram
  * 3 panes: log with graph / staged + unstaged files (checkbox, drag & drop) / hunk diff
  * hunk diff is lazy: only hunk headers are read when a file is selected, line texts are fetched only for the visible rows
  * stage / unstage / discard by file, hunk, or selected lines
- * file menu: stop tracking, ignore… (exact file, extension, everything beneath a folder, custom pattern;
+ * file menu: open (default application), resolve using mine / theirs, stop tracking, ignore… (exact file, extension, everything beneath a folder, custom pattern;
    into .gitignore, .git/info/exclude or the global ignore file), move to trash
- * commit, amend, branches / remotes / tags / stashes sidebar, checkout, new branch, stash / apply / pop / delete
- * fetch / push (GitUpKit transport, ssh keys, credential prompts), pull (fast-forward or merge, conflicts, abort merge)
+ * commit, amend, commit message history (last 50, `-Dgitup.messageHistory=` to change)
+ * GitUp's "Edit Message" of any commit in the log (descendants are rewritten with the same trees)
+ * branches / remotes / tags / stashes sidebar, checkout, new branch, stash / apply / pop / delete, show a stash's changes
+ * fetch / push (GitUpKit transport, ssh keys, credential prompts),
+   pull (fast-forward, merge with conflicts / abort, or rebase: "Pull with Rebase" or `pull.rebase`)
  * live refresh with FSEvents (changes to ignored files only are skipped)
  * copy (⌘C) almost everywhere, context menus for SHA, message, paths, lines, hunks, patch
 
@@ -45,6 +48,8 @@ without a repository the last session's tabs are restored, or the repository bro
  * libgit2 structures are pinned to the GitUp build (e.g. `git_diff_file` is 64 bytes there)
  * `git_checkout_tree` with `NULL` options is a dry run, the app always passes `GIT_CHECKOUT_SAFE`
  * live refresh uses FSEvents directly, not `GCLiveRepository`, which loads the whole history when created
+ * "Edit Message" uses GitUp's `GCHistory` rewriting, the history is loaded only for that operation
+ * a rebase that hits conflicts is aborted (resolve by pulling with merge)
 
 ## References
 
@@ -53,6 +58,5 @@ without a repository the last session's tabs are restored, or the repository bro
 
 ## TODO
 
- * rebase on pull
- * conflict resolution helpers (use mine / theirs)
- * show a stash's changes in the log
+ * continue a conflicted rebase (now aborted)
+ * more of GitUp's rewriting: squash, fixup, delete commit, swap with parent

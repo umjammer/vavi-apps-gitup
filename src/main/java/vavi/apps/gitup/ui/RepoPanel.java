@@ -53,6 +53,8 @@ import vavi.apps.gitup.model.GitRepo.Ref;
 import vavi.apps.gitup.model.GitRepo.Stash;
 import vavi.apps.gitup.model.GitRepo.Status;
 import vavi.apps.gitup.model.LazyPatch;
+import vavi.apps.gitup.model.MessageHistory;
+import vavi.apps.gitup.objc.HistoryOps;
 import vavi.apps.gitup.objc.RemoteOps;
 
 import static java.lang.System.getLogger;
@@ -85,6 +87,8 @@ public class RepoPanel extends JPanel {
         void titleChanged(RepoPanel panel);
         /** the repository could not be opened */
         void failed(RepoPanel panel);
+        /** recent commit messages, shared by the tabs */
+        MessageHistory messageHistory();
     }
 
     private final GitExecutor exec = new GitExecutor(this::showError);
@@ -206,12 +210,14 @@ public class RepoPanel extends JPanel {
             @Override public void selected(CommitRow commit) { commitSelected(commit); }
             @Override public void loadMore() { RepoPanel.this.loadMore(); }
             @Override public void createBranch(CommitRow commit) { newBranch(commit.oid()); }
+            @Override public void editMessage(CommitRow commit) { RepoPanel.this.editMessage(commit); }
         });
         sidebar.setListener(new SidebarPanel.Listener() {
             @Override public void checkout(Ref ref) { RepoPanel.this.checkout(ref); }
             @Override public void reveal(Ref ref) { logPanel.select(ref.target()); }
             @Override public void stashApply(Stash stash, boolean drop) { RepoPanel.this.stashApply(stash, drop); }
             @Override public void stashDrop(Stash stash) { RepoPanel.this.stashDrop(stash); }
+            @Override public void showStash(Stash stash) { RepoPanel.this.showStash(stash); }
         });
         FileTable.Listener files = new FileTable.Listener() {
             @Override public void move(FileTable source, List<FileChange> list) {
@@ -227,6 +233,9 @@ public class RepoPanel extends JPanel {
             }
             @Override public void ignore(List<FileChange> list) { RepoPanel.this.ignore(list); }
             @Override public void trash(List<FileChange> list) { RepoPanel.this.trash(list); }
+            @Override public void resolve(List<FileChange> list, boolean ours) {
+                exec.run(() -> list.forEach(f -> repo.resolveConflict(f.path(), ours)), RepoPanel.this::refreshStatus);
+            }
         };
         staging.stagedTable.setListener(files);
         staging.unstagedTable.setListener(files);
@@ -258,6 +267,7 @@ public class RepoPanel extends JPanel {
             }
         });
         staging.abortMergeButton.addActionListener(e -> abortMerge());
+        staging.historyButton.addActionListener(e -> showMessageHistory());
         diff.setListener(this::diffAction);
     }
 
@@ -277,7 +287,8 @@ public class RepoPanel extends JPanel {
         logPanel.select(null);
         staging.message.requestFocusInWindow();
     });
-    private final Action pullAction = action("Pull", "Fetch, then fast-forward or merge the upstream", KeyStroke.getKeyStroke(KeyEvent.VK_P, menuMask | shift), this::pull);
+    private final Action pullAction = action("Pull", "Fetch, then fast-forward, or merge / rebase (pull.rebase) the upstream", KeyStroke.getKeyStroke(KeyEvent.VK_P, menuMask | shift), () -> pull(null));
+    private final Action pullRebaseAction = action("Pull with Rebase", "Fetch, then rebase the current branch onto the upstream", null, () -> pull(true));
     private final Action pushAction = action("Push", "Push the current branch", KeyStroke.getKeyStroke(KeyEvent.VK_P, menuMask), this::push);
     private final Action fetchAction = action("Fetch", "Fetch all remotes", KeyStroke.getKeyStroke(KeyEvent.VK_F, menuMask | shift), this::fetch);
     private final Action branchAction = action("Branch", "Create a branch at HEAD", KeyStroke.getKeyStroke(KeyEvent.VK_B, menuMask | shift), () -> newBranch(null));
@@ -289,7 +300,7 @@ public class RepoPanel extends JPanel {
     /** actions for the window's "Repository" menu, null is a separator */
     public List<Action> repositoryActions() {
         return java.util.Arrays.asList(refreshAction, null, commitAction, branchAction, stashAction, discardAction, abortMergeAction,
-                null, fetchAction, pullAction, pushAction);
+                null, fetchAction, pullAction, pullRebaseAction, pushAction);
     }
 
     private JToolBar buildToolBar() {
@@ -304,7 +315,7 @@ public class RepoPanel extends JPanel {
             b.setHideActionText(false);
             b.setFocusable(false);
         }
-        remoteActions.addAll(List.of(pullAction, pushAction, fetchAction));
+        remoteActions.addAll(List.of(pullAction, pullRebaseAction, pushAction, fetchAction));
         abortMergeAction.setEnabled(false);
         return bar;
     }
@@ -620,6 +631,11 @@ public class RepoPanel extends JPanel {
             return;
         }
         exec.submit(() -> amend ? repo.amend(message + "\n") : repo.commit(message + "\n"), oid -> {
+            try {
+                host.messageHistory().add(message);
+            } catch (RuntimeException e) {
+                logger.log(System.Logger.Level.WARNING, "message history: " + e.getMessage(), e);
+            }
             staging.message.setText("");
             staging.amendBox.setSelected(false);
             statusBar.setText((amend ? "Amended " : "Committed ") + oid.substring(0, 7));
@@ -633,6 +649,61 @@ public class RepoPanel extends JPanel {
         exec.run(() -> repo.abortMerge(), () -> {
             staging.message.setText("");
             refreshAll(true);
+        });
+    }
+
+    /** a popup of recent commit messages under the History button */
+    private void showMessageHistory() {
+        List<String> messages = host.messageHistory().messages();
+        javax.swing.JPopupMenu menu = new javax.swing.JPopupMenu();
+        if (messages.isEmpty()) {
+            javax.swing.JMenuItem none = new javax.swing.JMenuItem("No recent messages");
+            none.setEnabled(false);
+            menu.add(none);
+        }
+        for (String m : messages) {
+            String first = m.lines().findFirst().orElse("");
+            javax.swing.JMenuItem item = new javax.swing.JMenuItem(first.length() > 72 ? first.substring(0, 71) + "…" : first);
+            item.setToolTipText("<html><pre>" + m.replace("&", "&amp;").replace("<", "&lt;") + "</pre></html>");
+            item.addActionListener(e -> {
+                staging.message.setText(m);
+                staging.message.requestFocusInWindow();
+            });
+            menu.add(item);
+        }
+        menu.show(staging.historyButton, 0, staging.historyButton.getHeight());
+    }
+
+    // history rewriting
+
+    /** GitUp's "Edit Message": the commit and its descendants are rewritten with the same trees */
+    private void editMessage(CommitRow c) {
+        exec.submit(() -> Map.entry(repo.isPublished(c.oid()), repo.state()), info -> {
+            if (info.getValue() != GitRepo.State.NONE) {
+                showError(new IllegalStateException("finish or abort the merge in progress first"));
+                return;
+            }
+            javax.swing.JTextArea text = new javax.swing.JTextArea(c.message().strip(), 8, 60);
+            text.setFont(staging.message.getFont());
+            text.setLineWrap(true);
+            text.setWrapStyleWord(true);
+            JPanel p = new JPanel(new BorderLayout(0, 6));
+            p.add(new JLabel("New commit message for " + c.shortOid() + ":"), BorderLayout.NORTH);
+            p.add(new JScrollPane(text), BorderLayout.CENTER);
+            if (info.getKey()) {
+                JLabel warn = new JLabel("<html><font color='#bc4c00'>This commit is on a remote branch already.<br>"
+                        + "Rewriting it changes published history, others will need to reconcile.</font></html>");
+                p.add(warn, BorderLayout.SOUTH);
+            }
+            if (JOptionPane.showConfirmDialog(this, p, "Edit Message", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) return;
+            String message = text.getText().strip();
+            if (message.isEmpty() || message.equals(c.message().strip())) return;
+            exec.submit(() -> HistoryOps.editMessage(workdir, c.oid(), message + "\n"), newOid -> {
+                statusBar.setText("Rewrote " + c.shortOid() + " as " + newOid.substring(0, 7));
+                selectedCommit = newOid;
+                showingWorking = false;
+                refreshAll(true);
+            });
         });
     }
 
@@ -684,6 +755,14 @@ public class RepoPanel extends JPanel {
         });
     }
 
+    /** shows the stash like a commit: its message and its changes against the stashed HEAD */
+    private void showStash(Stash stash) {
+        exec.submit(() -> repo.commitRow(stash.oid()), row -> {
+            logPanel.getTable().clearSelection();
+            commitSelected(row);
+        });
+    }
+
     private void stashDrop(Stash stash) {
         if (!confirm("Delete the stash \"" + stash.message() + "\"?\nThis cannot be undone.", "Delete Stash")) return;
         exec.run(() -> repo.stashDrop(stash.index()), () -> refreshAll(false));
@@ -718,19 +797,21 @@ public class RepoPanel extends JPanel {
         });
     }
 
-    private void pull() {
-        remoteOp("Pull", ops -> {
+    /** @param rebase null: as configured (pull.rebase / branch.&lt;name&gt;.rebase) */
+    private void pull(Boolean rebase) {
+        remoteOp(Boolean.TRUE.equals(rebase) ? "Pull (rebase)" : "Pull", ops -> {
             ops.fetchAll();
-            PullResult r = repo.pullFromUpstream();
+            PullResult r = repo.pullFromUpstream(rebase != null ? rebase : repo.isPullRebaseConfigured());
             if (r == PullResult.CONFLICTS) {
                 SwingUtilities.invokeLater(() -> JOptionPane.showMessageDialog(this,
-                        "The merge has conflicts.\nResolve them, stage the files and commit, or abort the merge.",
+                        "The merge has conflicts.\nResolve them (right click: Resolve Using Mine / Theirs, or edit and stage),\nthen commit, or abort the merge.",
                         "Pull", JOptionPane.WARNING_MESSAGE));
             }
             return switch (r) {
                 case UP_TO_DATE -> "already up to date";
                 case FAST_FORWARD -> "fast-forwarded";
                 case MERGED -> "merged";
+                case REBASED -> "rebased";
                 case CONFLICTS -> "merge has conflicts";
             };
         });
