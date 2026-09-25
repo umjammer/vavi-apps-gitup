@@ -81,10 +81,16 @@ public class LogPanel extends JPanel {
 
     private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault());
 
-    private static final Color[] LANE_COLORS = {
-        new Color(0x0969da), new Color(0x2da44e), new Color(0xbf3989), new Color(0xbc4c00),
-        new Color(0x8250df), new Color(0x1b7c83), new Color(0xcf222e), new Color(0x9a6700),
+    /** SourceTree's graph colors (its STColors.graph), in its order */
+    static final Color[] LANE_COLORS = {
+        rgb(0.00, 0.28, 0.69), rgb(0.75, 0.15, 0.00), rgb(1.00, 0.54, 0.00), rgb(0.00, 0.40, 0.26),
+        rgb(0.25, 0.19, 0.58), rgb(0.00, 0.55, 0.65), rgb(0.00, 0.39, 1.00), rgb(1.00, 0.33, 0.18),
+        rgb(1.00, 0.67, 0.00), rgb(0.21, 0.70, 0.49), rgb(0.39, 0.33, 0.75), rgb(0.00, 0.72, 0.85),
     };
+
+    private static Color rgb(double r, double g, double b) {
+        return new Color((float) r, (float) g, (float) b);
+    }
 
     private static final int LANE_WIDTH = 14;
 
