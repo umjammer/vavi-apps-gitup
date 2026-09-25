@@ -11,8 +11,6 @@ import java.util.Deque;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 import javax.swing.SwingUtilities;
 
@@ -32,7 +30,9 @@ public final class GitExecutor {
 
     private Thread thread;
 
-    private final ExecutorService executor = Executors.newSingleThreadExecutor(r -> {
+    /** a single thread, its queue is taken over by {@link #await} */
+    private final java.util.concurrent.ThreadPoolExecutor executor = new java.util.concurrent.ThreadPoolExecutor(1, 1,
+            0L, java.util.concurrent.TimeUnit.MILLISECONDS, new java.util.concurrent.LinkedBlockingQueue<>(), r -> {
         Thread t = new Thread(r, "git");
         t.setDaemon(true);
         thread = t;
@@ -92,6 +92,8 @@ public final class GitExecutor {
         synchronized (this) {
             if (nested != null) throw new IllegalStateException("already waiting");
             nested = new ArrayDeque<>();
+            // submitted before the wait began, they would be queued behind this task (deadlock when the future depends on them)
+            executor.getQueue().drainTo(nested);
         }
         future.whenComplete((v, t) -> { synchronized (this) { notifyAll(); } });
         try {

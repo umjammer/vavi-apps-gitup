@@ -51,4 +51,19 @@ class GitExecutorTest {
         assertTrue(order.contains("later git"));
         exec.shutdown();
     }
+
+    /** a task submitted just before the wait began (the dialog's first reload) must not be stuck behind the waiting task */
+    @Test
+    void awaitTakesOverQueuedTasks() throws Exception {
+        GitExecutor exec = new GitExecutor(Throwable::printStackTrace);
+        CompletableFuture<String> user = new CompletableFuture<>();
+        CompletableFuture<String> result = new CompletableFuture<>();
+        exec.run(() -> {
+            // queued in the executor, behind this task, before await() starts
+            exec.run(() -> user.complete("ok"), null);
+            result.complete(exec.await(user));
+        }, null);
+        assertEquals("ok", result.get(5, TimeUnit.SECONDS));
+        exec.shutdown();
+    }
 }
