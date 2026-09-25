@@ -26,6 +26,7 @@ import vavi.apps.gitup.model.GitRepo.PullResult;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 
@@ -189,19 +190,45 @@ class GitRepoFeaturesTest {
     }
 
     @Test
-    void pullRebaseConflictAborts() throws Exception {
+    void pullRebaseConflictContinue() throws Exception {
+        Path b = setupClone();
+        pushFromA(3, "THREE-A");
+        commitInB(b, 3, "THREE-B");
+        commitInB(b, 5, "five");
+        sh(b, "fetch", "-q");
+        try (GitRepo repo = new GitRepo(b)) {
+            assertEquals(PullResult.REBASE_CONFLICTS, repo.pullFromUpstream(true));
+            assertEquals(GitRepo.State.REBASE, repo.state());
+            assertEquals(List.of("f.txt"), repo.conflictedPaths());
+            assertThrows(GitException.class, repo::continueRebase, "conflicts not resolved yet");
+
+            repo.resolveConflict("f.txt", true); // ours: the upstream side while rebasing
+            Files.writeString(b.resolve("f.txt"), "1\n2\nTHREE-AB\n4\n5\n");
+            repo.stage(List.of(new FileChange("f.txt", "f.txt", FileChange.Kind.MODIFIED, false)));
+            assertTrue(repo.continueRebase());
+            assertEquals(GitRepo.State.NONE, repo.state());
+        }
+        assertEquals("b: five\nb: THREE-B\na: THREE-A\none", sh(b, "log", "--format=%s").strip());
+        assertEquals("1\n2\nTHREE-AB\n4\nfive\n", Files.readString(b.resolve("f.txt")));
+        assertEquals("", sh(b, "status", "--porcelain"));
+        assertEquals("main", sh(b, "rev-parse", "--abbrev-ref", "HEAD").strip());
+    }
+
+    @Test
+    void pullRebaseConflictAbort() throws Exception {
         Path b = setupClone();
         pushFromA(3, "THREE-A");
         commitInB(b, 3, "THREE-B");
         sh(b, "fetch", "-q");
         String before = sh(b, "rev-parse", "HEAD");
         try (GitRepo repo = new GitRepo(b)) {
-            GitException e = org.junit.jupiter.api.Assertions.assertThrows(GitException.class, () -> repo.pullFromUpstream(true));
-            assertTrue(e.getMessage().contains("f.txt"), e.getMessage());
+            assertEquals(PullResult.REBASE_CONFLICTS, repo.pullFromUpstream(true));
+            repo.abortRebase();
             assertEquals(GitRepo.State.NONE, repo.state());
         }
         assertEquals(before, sh(b, "rev-parse", "HEAD"));
         assertEquals("", sh(b, "status", "--porcelain"));
+        assertEquals("main", sh(b, "rev-parse", "--abbrev-ref", "HEAD").strip());
     }
 
     @Test
@@ -212,7 +239,7 @@ class GitRepoFeaturesTest {
         sh(b, "fetch", "-q");
         Files.writeString(b.resolve("f.txt"), "dirty\n");
         try (GitRepo repo = new GitRepo(b)) {
-            GitException e = org.junit.jupiter.api.Assertions.assertThrows(GitException.class, () -> repo.pullFromUpstream(true));
+            GitException e = assertThrows(GitException.class, () -> repo.pullFromUpstream(true));
             assertTrue(e.getMessage().contains("stash"), e.getMessage());
         }
         assertEquals("dirty\n", Files.readString(b.resolve("f.txt")));

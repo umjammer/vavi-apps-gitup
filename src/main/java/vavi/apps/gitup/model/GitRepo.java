@@ -231,7 +231,7 @@ public class GitRepo implements AutoCloseable {
     }
 
     /** @return HEAD tree, null when unborn */
-    private Pointer headTree() {
+    private Pointer headTree0() {
         if (isHeadUnborn()) return null;
         return commitTree(revparse("HEAD"));
     }
@@ -269,7 +269,7 @@ public class GitRepo implements AutoCloseable {
         Pointer index = index();
         try {
             if (file.staged()) {
-                Pointer tree = headTree();
+                Pointer tree = headTree0();
                 try {
                     check(git.git_diff_tree_to_index(dp, handle(), tree, index, o), "diff");
                 } finally {
@@ -452,11 +452,15 @@ public class GitRepo implements AutoCloseable {
     // commit
 
     /** repository state */
-    public enum State { NONE, MERGE, OTHER }
+    public enum State { NONE, MERGE, REBASE, OTHER }
 
     public State state() {
-        int s = git.git_repository_state(handle());
-        return s == GIT_REPOSITORY_STATE_NONE ? State.NONE : s == GIT_REPOSITORY_STATE_MERGE ? State.MERGE : State.OTHER;
+        return switch (git.git_repository_state(handle())) {
+            case GIT_REPOSITORY_STATE_NONE -> State.NONE;
+            case GIT_REPOSITORY_STATE_MERGE -> State.MERGE;
+            case GIT_REPOSITORY_STATE_REBASE, GIT_REPOSITORY_STATE_REBASE_INTERACTIVE, GIT_REPOSITORY_STATE_REBASE_MERGE -> State.REBASE;
+            default -> State.OTHER;
+        };
     }
 
     /** @return .git/MERGE_MSG, null when none */
@@ -545,6 +549,28 @@ public class GitRepo implements AutoCloseable {
         }
     }
 
+    /** index and working directory to HEAD (git reset --hard HEAD), untracked files are kept */
+    public void resetHardToHead() {
+        PointerByReference op = new PointerByReference();
+        check(git.git_revparse_single(op, handle(), "HEAD"), "HEAD");
+        try {
+            check(git.git_reset(handle(), op.getValue(), GIT_RESET_HARD, null), "reset");
+        } finally {
+            git.git_object_free(op.getValue());
+        }
+    }
+
+    /** @return the tree id of HEAD, null when unborn */
+    public String headTree() {
+        if (isHeadUnborn()) return null;
+        Pointer t = headTree0();
+        try {
+            return git.git_oid_tostr_s(git.git_object_id(t));
+        } finally {
+            git.git_tree_free(t);
+        }
+    }
+
     /** aborts a merge in progress: hard reset to HEAD and cleans up the merge state */
     public void abortMerge() {
         PointerByReference op = new PointerByReference();
@@ -626,7 +652,7 @@ public class GitRepo implements AutoCloseable {
     }
 
     /** result of {@link #pullFromUpstream()} */
-    public enum PullResult { UP_TO_DATE, FAST_FORWARD, MERGED, CONFLICTS, REBASED }
+    public enum PullResult { UP_TO_DATE, FAST_FORWARD, MERGED, CONFLICTS, REBASED, REBASE_CONFLICTS }
 
     /** @return true when branch.&lt;name&gt;.rebase or pull.rebase is set */
     public boolean isPullRebaseConfigured() {
@@ -649,8 +675,8 @@ public class GitRepo implements AutoCloseable {
 
     /**
      * integrates the fetched upstream into the current branch: fast-forward when possible,
-     * otherwise a merge commit (on conflicts the repository is left merging) or a rebase
-     * (on conflicts the rebase is aborted and an exception is thrown).
+     * otherwise a merge commit or a rebase. on conflicts the repository is left merging
+     * ({@link #commit}, {@link #abortMerge}) or rebasing ({@link #continueRebase}, {@link #abortRebase}).
      */
     public PullResult pullFromUpstream(boolean rebase) {
         String branch = headBranch();
@@ -674,8 +700,7 @@ public class GitRepo implements AutoCloseable {
                 return PullResult.FAST_FORWARD;
             }
             if (rebase) {
-                rebase(heads[0], upstream);
-                return PullResult.REBASED;
+                return rebase(heads[0]) ? PullResult.REBASED : PullResult.REBASE_CONFLICTS;
             }
             Pointer opts = LibGit2.safeCheckoutOptions();
             opts.setInt(4, GIT_CHECKOUT_SAFE | GIT_CHECKOUT_ALLOW_CONFLICTS);
@@ -694,43 +719,79 @@ public class GitRepo implements AutoCloseable {
         return PullResult.MERGED;
     }
 
-    /** rebases HEAD onto the annotated upstream, aborts on conflicts */
-    private void rebase(Pointer upstream, String upstreamName) {
+    /**
+     * rebases HEAD onto the annotated upstream.
+     *
+     * @return false when stopped by conflicts (the repository is left rebasing, see {@link #continueRebase()})
+     */
+    private boolean rebase(Pointer upstream) {
         Status st = status();
         if (!st.staged().isEmpty() || st.unstaged().stream().anyMatch(f -> f.kind() != FileChange.Kind.UNTRACKED)) {
             throw new GitException("commit or stash the local changes before rebasing");
         }
         PointerByReference rp = new PointerByReference();
         check(git.git_rebase_init(rp, handle(), null, upstream, null, null), "rebase");
-        Pointer rebase = rp.getValue();
+        return runRebase(rp.getValue(), false);
+    }
+
+    /**
+     * applies the remaining operations of the rebase, frees it.
+     *
+     * @param commitCurrent true to commit the current (resolved) operation first
+     * @return true when finished, false when stopped by conflicts
+     */
+    private boolean runRebase(Pointer rebase, boolean commitCurrent) {
         Pointer sig = null;
         try {
             sig = signature();
+            if (commitCurrent) commitRebaseOperation(rebase, sig);
             PointerByReference op = new PointerByReference();
             int rc;
             while ((rc = git.git_rebase_next(op, rebase)) == 0) {
-                List<String> conflicts = status().unstaged().stream()
-                        .filter(f -> f.kind() == FileChange.Kind.CONFLICTED).map(FileChange::path).toList();
-                if (!conflicts.isEmpty()) {
-                    git.git_rebase_abort(rebase);
-                    throw new GitException("rebase onto " + upstreamName + " stopped by conflicts in " + String.join(", ", conflicts)
-                            + ", the rebase was aborted. pull with merge to resolve them.");
-                }
-                int c = git.git_rebase_commit(new GitOid(), rebase, null, sig, null, null);
-                if (c == GIT_EAPPLIED) continue; // already upstream
-                if (c < 0) {
-                    git.git_rebase_abort(rebase);
-                    check(c, "rebase commit");
-                }
+                if (!conflictedPaths().isEmpty()) return false; // left for the user
+                commitRebaseOperation(rebase, sig);
             }
-            if (rc != GIT_ITEROVER) {
-                git.git_rebase_abort(rebase);
-                check(rc, "rebase");
-            }
+            if (rc != GIT_ITEROVER) check(rc, "rebase");
             check(git.git_rebase_finish(rebase, sig), "finish rebase");
+            return true;
         } finally {
             if (sig != null) git.git_signature_free(sig);
             git.git_rebase_free(rebase);
+        }
+    }
+
+    private void commitRebaseOperation(Pointer rebase, Pointer sig) {
+        int c = git.git_rebase_commit(new GitOid(), rebase, null, sig, null, null);
+        if (c != GIT_EAPPLIED) check(c, "rebase commit"); // EAPPLIED: already upstream, skipped
+    }
+
+    /** @return paths with unresolved conflicts */
+    public List<String> conflictedPaths() {
+        return status().unstaged().stream().filter(f -> f.kind() == FileChange.Kind.CONFLICTED).map(FileChange::path).toList();
+    }
+
+    /**
+     * commits the resolved operation of a stopped rebase and goes on.
+     *
+     * @return true when the rebase finished, false when stopped by conflicts again
+     */
+    public boolean continueRebase() {
+        if (state() != State.REBASE) throw new GitException("no rebase in progress");
+        List<String> conflicts = conflictedPaths();
+        if (!conflicts.isEmpty()) throw new GitException("resolve and stage first: " + String.join(", ", conflicts));
+        PointerByReference rp = new PointerByReference();
+        check(git.git_rebase_open(rp, handle(), null), "open rebase");
+        return runRebase(rp.getValue(), true);
+    }
+
+    /** throws the rebase in progress away, the branch is back where it was */
+    public void abortRebase() {
+        PointerByReference rp = new PointerByReference();
+        check(git.git_rebase_open(rp, handle(), null), "open rebase");
+        try {
+            check(git.git_rebase_abort(rp.getValue()), "abort rebase");
+        } finally {
+            git.git_rebase_free(rp.getValue());
         }
     }
 

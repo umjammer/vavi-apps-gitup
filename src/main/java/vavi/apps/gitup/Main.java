@@ -29,6 +29,7 @@ import vavi.apps.gitup.model.Bookmarks;
 import vavi.apps.gitup.model.MessageHistory;
 import vavi.apps.gitup.ui.MainWindow;
 import vavi.apps.gitup.ui.RepositoryBrowser;
+import vavi.apps.gitup.ui.WindowState;
 
 
 /**
@@ -55,6 +56,7 @@ public class Main implements MainWindow.App {
     private static final String OPEN_TABS = "openTabs";
     private static final String SELECTED_TAB = "selectedTab";
     private static final String LAST_DIR = "lastRepository";
+    private static final String BROWSER_VISIBLE = "browser.visible";
 
     private final Path bookmarksFile = System.getProperty("gitup.bookmarks") != null
             ? Path.of(System.getProperty("gitup.bookmarks")) : Bookmarks.defaultFile();
@@ -98,6 +100,7 @@ public class Main implements MainWindow.App {
         }
         paths.forEach(this::open);
         window.select(selected);
+        if (WindowState.getFlag(BROWSER_VISIBLE, false)) showBrowser();
     }
 
     /** opens the repository in a tab of the main window, bookmarks it */
@@ -135,10 +138,12 @@ public class Main implements MainWindow.App {
             browser = new RepositoryBrowser(bookmarks, bookmarksFile, this::open);
             browser.addWindowListener(new WindowAdapter() {
                 @Override public void windowClosing(WindowEvent e) {
+                    WindowState.setFlag(BROWSER_VISIBLE, false);
                     SwingUtilities.invokeLater(Main.this::exitIfNoWindow);
                 }
             });
         }
+        WindowState.setFlag(BROWSER_VISIBLE, true);
         browser.setVisible(true);
         browser.toFront();
     }

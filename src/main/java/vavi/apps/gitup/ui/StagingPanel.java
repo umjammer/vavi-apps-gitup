@@ -22,6 +22,7 @@ import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
 import javax.swing.JTextArea;
 import javax.swing.KeyStroke;
+import javax.swing.UIManager;
 
 import vavi.apps.gitup.model.CommitLog.CommitRow;
 
@@ -50,6 +51,8 @@ public class StagingPanel extends JPanel {
     final JCheckBox amendBox = new JCheckBox("Amend last commit");
     final JButton historyButton = new JButton("History ▾");
     final JButton abortMergeButton = new JButton("Abort Merge");
+    final JButton continueRebaseButton = new JButton("Continue Rebase");
+    private final JLabel bannerLabel = new JLabel();
     private final JPanel mergeBanner = new JPanel(new BorderLayout(6, 0));
 
     private final JLabel stagedLabel = new JLabel();
@@ -93,12 +96,15 @@ public class StagingPanel extends JPanel {
         buttons.add(commitButton, BorderLayout.EAST);
         commitBox.add(buttons, BorderLayout.SOUTH);
 
-        JLabel mergeLabel = new JLabel("Merging: resolve conflicts, stage the files, then commit.");
         mergeBanner.setBorder(BorderFactory.createEmptyBorder(4, 6, 4, 4));
         mergeBanner.setBackground(new java.awt.Color(0xfff4ce));
-        mergeLabel.setForeground(java.awt.Color.darkGray);
-        mergeBanner.add(mergeLabel, BorderLayout.CENTER);
-        mergeBanner.add(abortMergeButton, BorderLayout.EAST);
+        bannerLabel.setForeground(java.awt.Color.darkGray);
+        mergeBanner.add(bannerLabel, BorderLayout.CENTER);
+        JPanel bannerButtons = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, 4, 0));
+        bannerButtons.setOpaque(false);
+        bannerButtons.add(continueRebaseButton);
+        bannerButtons.add(abortMergeButton);
+        mergeBanner.add(bannerButtons, BorderLayout.EAST);
         mergeBanner.setVisible(false);
         commitBox.add(mergeBanner, BorderLayout.NORTH);
 
@@ -106,9 +112,14 @@ public class StagingPanel extends JPanel {
         working.setResizeWeight(1);
         working.setBorder(null);
         add(working, "working");
+        WindowState.remember(lists, "split.lists");
+        WindowState.remember(working, "split.commitBox");
 
         // a commit
         commitInfo.setEditable(false);
+        // a plain (non UIResource) color, so the look and feel does not gray out the read-only text
+        java.awt.Color white = UIManager.getColor("TextArea.background");
+        commitInfo.setBackground(new java.awt.Color(white != null ? white.getRGB() : 0xffffff));
         commitInfo.setLineWrap(true);
         commitInfo.setWrapStyleWord(true);
         commitInfo.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
@@ -116,6 +127,7 @@ public class StagingPanel extends JPanel {
         commit.setResizeWeight(0.3);
         commit.setBorder(null);
         add(commit, "commit");
+        WindowState.remember(commit, "split.commitInfo");
 
         setCounts(0, 0);
     }
@@ -140,11 +152,18 @@ public class StagingPanel extends JPanel {
         unstageAllButton.setEnabled(staged > 0);
     }
 
-    /** shows the merge banner, disables amend while merging */
-    public void setMerging(boolean merging) {
-        mergeBanner.setVisible(merging);
-        amendBox.setEnabled(!merging);
-        if (merging) amendBox.setSelected(false);
+    /** shows the merge / rebase banner, disables amend (and commit while rebasing) */
+    public void setState(vavi.apps.gitup.model.GitRepo.State state) {
+        boolean merging = state == vavi.apps.gitup.model.GitRepo.State.MERGE;
+        boolean rebasing = state == vavi.apps.gitup.model.GitRepo.State.REBASE;
+        mergeBanner.setVisible(merging || rebasing);
+        bannerLabel.setText(rebasing ? "Rebasing: resolve conflicts, stage the files, then continue."
+                : "Merging: resolve conflicts, stage the files, then commit.");
+        abortMergeButton.setText(rebasing ? "Abort Rebase" : "Abort Merge");
+        continueRebaseButton.setVisible(rebasing);
+        amendBox.setEnabled(!merging && !rebasing);
+        if (merging || rebasing) amendBox.setSelected(false);
+        commitButton.setEnabled(!rebasing);
         commitButton.setText(merging ? "Commit Merge" : "Commit");
     }
 
@@ -156,7 +175,8 @@ public class StagingPanel extends JPanel {
         commitInfo.setText("commit " + c.oid() + "\n"
                 + (c.parents().isEmpty() ? "" : "parents " + String.join(" ", c.parents().stream().map(p -> p.substring(0, 7)).toList()) + "\n")
                 + "author " + c.author() + " <" + c.email() + ">\n"
-                + "date   " + c.time() + "\n\n"
+                + "date   " + java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss Z")
+                        .withZone(java.time.ZoneId.systemDefault()).format(c.time()) + "\n\n"
                 + c.message());
         commitInfo.setCaretPosition(0);
         cards.show(this, "commit");

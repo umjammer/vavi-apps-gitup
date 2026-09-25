@@ -69,8 +69,7 @@ public class MainWindow extends JFrame {
         tabs.addChangeListener(e -> selectionChanged());
         setContentPane(tabs);
         setJMenuBar(buildMenuBar());
-        setSize(new Dimension(1400, 900));
-        setLocationByPlatform(true);
+        WindowState.remember(this, "main", new Dimension(1400, 900));
 
         addWindowListener(new WindowAdapter() {
             @Override public void windowActivated(WindowEvent e) {

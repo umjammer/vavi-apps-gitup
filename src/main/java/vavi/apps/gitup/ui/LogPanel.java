@@ -63,7 +63,12 @@ public class LogPanel extends JPanel {
         void createBranch(CommitRow commit);
         /** GitUp's "Edit Message": rewrites the commit and its descendants */
         void editMessage(CommitRow commit);
+        /** GitUp's other history rewrites */
+        void rewrite(CommitRow commit, Rewrite rewrite);
     }
+
+    /** GitUp's history rewrites offered in the log */
+    public enum Rewrite { SQUASH, FIXUP, MOVE_DOWN, MOVE_UP, DELETE }
 
     private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault());
 
@@ -73,6 +78,9 @@ public class LogPanel extends JPanel {
     };
 
     private static final int LANE_WIDTH = 14;
+
+    /** column indices: graph, description, commit, author, date */
+    static final int COMMIT = 2, AUTHOR = 3, DATE_COLUMN = 4;
 
     private final List<CommitRow> rows = new ArrayList<>();
     private Map<String, List<Ref>> refs = Collections.emptyMap();
@@ -96,13 +104,13 @@ public class LogPanel extends JPanel {
         table.getColumnModel().getColumn(0).setPreferredWidth(LANE_WIDTH * 4);
         table.getColumnModel().getColumn(1).setCellRenderer(new DescriptionRenderer());
         table.getColumnModel().getColumn(1).setPreferredWidth(600);
-        table.getColumnModel().getColumn(2).setPreferredWidth(130);
-        table.getColumnModel().getColumn(3).setPreferredWidth(160);
-        table.getColumnModel().getColumn(4).setPreferredWidth(80);
+        table.getColumnModel().getColumn(COMMIT).setPreferredWidth(80);
+        table.getColumnModel().getColumn(AUTHOR).setPreferredWidth(260);
+        table.getColumnModel().getColumn(DATE_COLUMN).setPreferredWidth(130);
         Font mono = new Font(Font.MONOSPACED, Font.PLAIN, 12);
         DefaultTableCellRenderer monoRenderer = new DefaultTableCellRenderer();
         monoRenderer.setFont(mono);
-        table.getColumnModel().getColumn(4).setCellRenderer((t, v, s, f, r, c) -> {
+        table.getColumnModel().getColumn(COMMIT).setCellRenderer((t, v, s, f, r, c) -> {
             Component comp = monoRenderer.getTableCellRendererComponent(t, v, s, false, r, c);
             comp.setFont(mono);
             return comp;
@@ -225,6 +233,16 @@ public class LogPanel extends JPanel {
         item(menu, "Copy Row", () -> copy(String.join("\t", c.shortOid(), c.summary(), DATE.format(c.time()), c.author())));
         menu.addSeparator();
         item(menu, "Edit Message…", () -> { if (listener != null) listener.editMessage(c); });
+        javax.swing.JMenu rewrite = new javax.swing.JMenu("Rewrite");
+        boolean single = c.parents().size() == 1;
+        rewriteItem(rewrite, "Squash Into Parent…", c, Rewrite.SQUASH, single);
+        rewriteItem(rewrite, "Fixup Into Parent", c, Rewrite.FIXUP, single);
+        rewrite.addSeparator();
+        rewriteItem(rewrite, "Move Up (Swap with Child)", c, Rewrite.MOVE_UP, single);
+        rewriteItem(rewrite, "Move Down (Swap with Parent)", c, Rewrite.MOVE_DOWN, single);
+        rewrite.addSeparator();
+        rewriteItem(rewrite, "Delete Commit…", c, Rewrite.DELETE, single);
+        menu.add(rewrite);
         item(menu, "New Branch Here…", () -> { if (listener != null) listener.createBranch(c); });
         menu.show(table, e.getX(), e.getY());
     }
@@ -235,12 +253,19 @@ public class LogPanel extends JPanel {
         menu.add(i);
     }
 
+    private void rewriteItem(javax.swing.JMenu menu, String label, CommitRow c, Rewrite r, boolean enabled) {
+        JMenuItem i = new JMenuItem(label);
+        i.setEnabled(enabled);
+        i.addActionListener(e -> { if (listener != null) listener.rewrite(c, r); });
+        menu.add(i);
+    }
+
     static void copy(String s) {
         Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(s), null);
     }
 
     private class Model extends AbstractTableModel {
-        private final String[] names = {"Graph", "Description", "Date", "Author", "Commit"};
+        private final String[] names = {"Graph", "Description", "Commit", "Author", "Date"};
 
         @Override public int getRowCount() { return rows.size() + (uncommitted ? 1 : 0); }
         @Override public int getColumnCount() { return names.length; }
@@ -251,9 +276,9 @@ public class LogPanel extends JPanel {
             if (row == null) return c == 1 ? "Uncommitted changes" : c == 0 ? null : "";
             return switch (c) {
                 case 0, 1 -> row;
-                case 2 -> DATE.format(row.time());
-                case 3 -> row.author();
-                default -> row.shortOid();
+                case COMMIT -> row.shortOid();
+                case AUTHOR -> row.author() + " <" + row.email() + ">";
+                default -> DATE.format(row.time());
             };
         }
     }

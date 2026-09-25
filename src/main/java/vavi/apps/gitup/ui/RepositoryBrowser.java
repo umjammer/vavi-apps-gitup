@@ -52,6 +52,7 @@ import vavi.apps.gitup.model.Bookmarks;
 import vavi.apps.gitup.model.Bookmarks.Entry;
 import vavi.apps.gitup.model.Bookmarks.Group;
 import vavi.apps.gitup.model.Bookmarks.Repo;
+import vavi.apps.gitup.model.SourceTreeImport;
 
 
 /**
@@ -140,11 +141,11 @@ public class RepositoryBrowser extends JFrame {
         top.setBorder(BorderFactory.createEmptyBorder(6, 6, 6, 6));
         top.add(search, BorderLayout.CENTER);
 
+        setJMenuBar(buildMenuBar());
         getContentPane().add(top, BorderLayout.NORTH);
         getContentPane().add(new JScrollPane(tree), BorderLayout.CENTER);
         getContentPane().add(bar, BorderLayout.SOUTH);
-        setSize(new Dimension(380, 560));
-        setLocationByPlatform(true);
+        WindowState.remember(this, "browser", new Dimension(380, 560));
         rebuild();
     }
 
@@ -213,6 +214,48 @@ public class RepositoryBrowser extends JFrame {
         if (n.getUserObject() instanceof Group g) return g;
         DefaultMutableTreeNode parent = (DefaultMutableTreeNode) n.getParent();
         return parent != null && parent.getUserObject() instanceof Group g ? g : bookmarks.root();
+    }
+
+    private javax.swing.JMenuBar buildMenuBar() {
+        javax.swing.JMenuBar bar = new javax.swing.JMenuBar();
+        javax.swing.JMenu menu = new javax.swing.JMenu("Repository Browser");
+        JMenuItem add = new JMenuItem("Add Existing Local Repository…");
+        add.addActionListener(e -> addExisting());
+        JMenuItem group = new JMenuItem("New Group…");
+        group.addActionListener(e -> newGroup());
+        JMenuItem importSt = new JMenuItem("Import SourceTree Bookmarks…");
+        importSt.addActionListener(e -> importSourceTree());
+        menu.add(add);
+        menu.add(group);
+        menu.addSeparator();
+        menu.add(importSt);
+        bar.add(menu);
+        return bar;
+    }
+
+    /** imports SourceTree's repository browser (groups and git repositories) */
+    void importSourceTree() {
+        Path plist = SourceTreeImport.defaultFile();
+        if (!Files.exists(plist)) {
+            JFileChooser chooser = new JFileChooser(System.getProperty("user.home"));
+            chooser.setDialogTitle("SourceTree browser.plist");
+            chooser.setFileHidingEnabled(false);
+            if (chooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) return;
+            plist = chooser.getSelectedFile().toPath();
+        }
+        try {
+            Group source = SourceTreeImport.read(plist);
+            if (JOptionPane.showConfirmDialog(this, "Import the bookmarks of SourceTree?\n" + plist
+                    + "\nGroups with the same name are merged, repositories already here are skipped.",
+                    "Import SourceTree Bookmarks", JOptionPane.OK_CANCEL_OPTION) != JOptionPane.OK_OPTION) return;
+            SourceTreeImport.Result r = SourceTreeImport.importInto(bookmarks, source);
+            save();
+            rebuild();
+            JOptionPane.showMessageDialog(this, "Imported " + r.added() + " repositories" + (r.skipped() > 0 ? ", " + r.skipped() + " already bookmarked" : "") + ".",
+                    "Import SourceTree Bookmarks", JOptionPane.INFORMATION_MESSAGE);
+        } catch (IOException | RuntimeException e) {
+            JOptionPane.showMessageDialog(this, "Cannot import " + plist + ":\n" + e.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+        }
     }
 
     // actions
@@ -301,6 +344,7 @@ public class RepositoryBrowser extends JFrame {
         }
         item(menu, "New Group…", this::newGroup);
         item(menu, "Add Existing Local Repository…", this::addExisting);
+        item(menu, "Import SourceTree Bookmarks…", this::importSourceTree);
         if (entry != null) {
             menu.addSeparator();
             item(menu, "Remove…", this::removeSelected);

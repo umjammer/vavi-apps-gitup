@@ -235,6 +235,9 @@ public interface LibGit2 extends Library {
 
     int GIT_REPOSITORY_STATE_NONE = 0;
     int GIT_REPOSITORY_STATE_MERGE = 1;
+    int GIT_REPOSITORY_STATE_REBASE = 7;
+    int GIT_REPOSITORY_STATE_REBASE_INTERACTIVE = 8;
+    int GIT_REPOSITORY_STATE_REBASE_MERGE = 9;
 
     int GIT_MERGE_ANALYSIS_NORMAL = 1 << 0;
     int GIT_MERGE_ANALYSIS_UP_TO_DATE = 1 << 1;
@@ -255,6 +258,7 @@ public interface LibGit2 extends Library {
     int GIT_EAPPLIED = -18;
 
     int git_rebase_init(PointerByReference out, Pointer repo, Pointer branch, Pointer upstream, Pointer onto, Pointer opts);
+    int git_rebase_open(PointerByReference out, Pointer repo, Pointer opts);
     int git_rebase_next(PointerByReference operation, Pointer rebase);
     int git_rebase_commit(GitOid id, Pointer rebase, Pointer author, Pointer committer, String encoding, String message);
     int git_rebase_finish(Pointer rebase, Pointer signature);

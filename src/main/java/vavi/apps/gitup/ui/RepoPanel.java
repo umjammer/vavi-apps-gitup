@@ -122,6 +122,8 @@ public class RepoPanel extends JPanel {
     private FileChange currentFile;
     private boolean adjusting;
     private boolean merging;
+    /** the repository state last shown */
+    private GitRepo.State repoState = GitRepo.State.NONE;
 
     // watcher batching (EDT)
     private final Set<String> pendingPaths = new LinkedHashSet<>();
@@ -200,6 +202,10 @@ public class RepoPanel extends JPanel {
         center.setDividerLocation(330);
         JSplitPane main = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, sidebar, center);
         main.setDividerLocation(200);
+        WindowState.remember(main, "split.sidebar");
+        WindowState.remember(center, "split.log");
+        WindowState.remember(bottom, "split.staging");
+        WindowState.remember(logPanel.getTable(), "log");
 
         add(buildToolBar(), BorderLayout.NORTH);
         add(main, BorderLayout.CENTER);
@@ -211,6 +217,7 @@ public class RepoPanel extends JPanel {
             @Override public void loadMore() { RepoPanel.this.loadMore(); }
             @Override public void createBranch(CommitRow commit) { newBranch(commit.oid()); }
             @Override public void editMessage(CommitRow commit) { RepoPanel.this.editMessage(commit); }
+            @Override public void rewrite(CommitRow commit, LogPanel.Rewrite rewrite) { RepoPanel.this.rewrite(commit, rewrite); }
         });
         sidebar.setListener(new SidebarPanel.Listener() {
             @Override public void checkout(Ref ref) { RepoPanel.this.checkout(ref); }
@@ -267,6 +274,7 @@ public class RepoPanel extends JPanel {
             }
         });
         staging.abortMergeButton.addActionListener(e -> abortMerge());
+        staging.continueRebaseButton.addActionListener(e -> continueRebase());
         staging.historyButton.addActionListener(e -> showMessageHistory());
         diff.setListener(this::diffAction);
     }
@@ -294,7 +302,7 @@ public class RepoPanel extends JPanel {
     private final Action branchAction = action("Branch", "Create a branch at HEAD", KeyStroke.getKeyStroke(KeyEvent.VK_B, menuMask | shift), () -> newBranch(null));
     private final Action stashAction = action("Stash", "Stash the working copy changes", KeyStroke.getKeyStroke(KeyEvent.VK_S, menuMask | shift), this::stash);
     private final Action discardAction = action("Discard", "Discard the selected unstaged files", null, () -> discardFiles(staging.unstagedTable.selectedFiles()));
-    private final Action abortMergeAction = action("Abort Merge", "Throw away the merge in progress", null, this::abortMerge);
+    private final Action abortMergeAction = action("Abort Merge", "Throw away the merge or rebase in progress", null, this::abortMerge);
     private final Action refreshAction = action("Refresh", "Reload the repository", KeyStroke.getKeyStroke(KeyEvent.VK_R, menuMask), () -> refreshAll(true));
 
     /** actions for the window's "Repository" menu, null is a separator */
@@ -444,11 +452,12 @@ public class RepoPanel extends JPanel {
         } finally {
             adjusting = false;
         }
-        boolean nowMerging = state == GitRepo.State.MERGE;
-        if (nowMerging != merging) {
-            merging = nowMerging;
-            staging.setMerging(merging);
-            abortMergeAction.setEnabled(merging);
+        if (state != repoState) {
+            repoState = state;
+            merging = state == GitRepo.State.MERGE;
+            staging.setState(state);
+            abortMergeAction.setEnabled(state == GitRepo.State.MERGE || state == GitRepo.State.REBASE);
+            abortMergeAction.putValue(Action.NAME, state == GitRepo.State.REBASE ? "Abort Rebase" : "Abort Merge");
             if (merging && staging.message.getText().isBlank()) {
                 exec.submit(() -> repo.mergeMessage(), m -> {
                     if (m != null && staging.message.getText().isBlank()) {
@@ -644,10 +653,26 @@ public class RepoPanel extends JPanel {
         });
     }
 
+    /** aborts the merge or the rebase in progress */
     private void abortMerge() {
+        if (repoState == GitRepo.State.REBASE) {
+            if (!confirm("Abort the rebase?\nThe branch goes back to where it was before the pull.", "Abort Rebase")) return;
+            exec.run(() -> repo.abortRebase(), () -> refreshAll(true));
+            return;
+        }
         if (!merging || !confirm("Abort the merge?\nAll changes of the merge, including resolved conflicts, are lost.", "Abort Merge")) return;
         exec.run(() -> repo.abortMerge(), () -> {
             staging.message.setText("");
+            refreshAll(true);
+        });
+    }
+
+    private void continueRebase() {
+        exec.submit(() -> repo.continueRebase(), finished -> {
+            statusBar.setText(finished ? "Rebase finished" : "Rebase stopped by conflicts again");
+            if (!finished) {
+                JOptionPane.showMessageDialog(this, "The next commit conflicts too.\nResolve, stage, then continue again.", "Rebase", JOptionPane.WARNING_MESSAGE);
+            }
             refreshAll(true);
         });
     }
@@ -702,6 +727,81 @@ public class RepoPanel extends JPanel {
                 statusBar.setText("Rewrote " + c.shortOid() + " as " + newOid.substring(0, 7));
                 selectedCommit = newOid;
                 showingWorking = false;
+                refreshAll(true);
+            });
+        });
+    }
+
+    /**
+     * GitUp's squash / fixup / swap / delete. operations that may change HEAD's tree need a clean
+     * working copy, the index and working directory are then reset to the new HEAD.
+     */
+    private void rewrite(CommitRow c, LogPanel.Rewrite r) {
+        exec.submit(() -> {
+            Status st = repo.status();
+            boolean clean = st.staged().isEmpty() && st.unstaged().stream().allMatch(f -> f.kind() == FileChange.Kind.UNTRACKED);
+            return new Object[] {repo.isPublished(c.oid()), repo.state(), clean, c.parents().isEmpty() ? null : repo.commitRow(c.parents().getFirst())};
+        }, info -> {
+            boolean published = (Boolean) info[0];
+            if (info[1] != GitRepo.State.NONE) {
+                showError(new IllegalStateException("finish or abort the merge / rebase in progress first"));
+                return;
+            }
+            if (!(Boolean) info[2]) {
+                showError(new IllegalStateException("commit or stash the local changes before rewriting history"));
+                return;
+            }
+            CommitRow parent = (CommitRow) info[3];
+            String warning = published ? "\n\nThis commit is on a remote branch already, this rewrites published history." : "";
+            String message;
+            switch (r) {
+                case SQUASH -> {
+                    if (parent == null) return;
+                    javax.swing.JTextArea text = new javax.swing.JTextArea(parent.message().strip() + "\n\n" + c.message().strip(), 10, 60);
+                    text.setFont(staging.message.getFont());
+                    JPanel p = new JPanel(new BorderLayout(0, 6));
+                    p.add(new JLabel("Squashed commit message:" + (published ? " (published history)" : "")), BorderLayout.NORTH);
+                    p.add(new JScrollPane(text), BorderLayout.CENTER);
+                    if (JOptionPane.showConfirmDialog(this, p, "Squash Into Parent", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) return;
+                    message = text.getText().strip();
+                    if (message.isEmpty()) return;
+                }
+                case DELETE -> {
+                    if (!confirm("Delete the commit " + c.shortOid() + " \"" + c.summary() + "\"?\nLater commits are replayed without it." + warning, "Delete Commit")) return;
+                    message = null;
+                }
+                default -> {
+                    if (published && !confirm("Rewrite " + c.shortOid() + "?" + warning, "Rewrite")) return;
+                    message = null;
+                }
+            }
+            String label = switch (r) {
+                case SQUASH -> "Squashed";
+                case FIXUP -> "Fixed up";
+                case MOVE_UP -> "Moved up";
+                case MOVE_DOWN -> "Moved down";
+                case DELETE -> "Deleted";
+            };
+            exec.submit(() -> {
+                String before = repo.headTree();
+                String result = switch (r) {
+                    case SQUASH -> HistoryOps.squashWithParent(workdir, c.oid(), message + "\n");
+                    case FIXUP -> HistoryOps.fixupWithParent(workdir, c.oid());
+                    case MOVE_UP -> HistoryOps.swapWithChild(workdir, c.oid());
+                    case MOVE_DOWN -> HistoryOps.swapWithParent(workdir, c.oid());
+                    case DELETE -> {
+                        HistoryOps.delete(workdir, c.oid());
+                        yield null;
+                    }
+                };
+                if (!java.util.Objects.equals(before, repo.headTree())) repo.resetHardToHead();
+                return java.util.Optional.ofNullable(result);
+            }, result -> {
+                statusBar.setText(label + " " + c.shortOid() + result.map(x -> " → " + x.substring(0, 7)).orElse(""));
+                result.ifPresent(x -> {
+                    selectedCommit = x;
+                    showingWorking = false;
+                });
                 refreshAll(true);
             });
         });
@@ -802,9 +902,11 @@ public class RepoPanel extends JPanel {
         remoteOp(Boolean.TRUE.equals(rebase) ? "Pull (rebase)" : "Pull", ops -> {
             ops.fetchAll();
             PullResult r = repo.pullFromUpstream(rebase != null ? rebase : repo.isPullRebaseConfigured());
-            if (r == PullResult.CONFLICTS) {
+            if (r == PullResult.CONFLICTS || r == PullResult.REBASE_CONFLICTS) {
+                boolean rb = r == PullResult.REBASE_CONFLICTS;
                 SwingUtilities.invokeLater(() -> JOptionPane.showMessageDialog(this,
-                        "The merge has conflicts.\nResolve them (right click: Resolve Using Mine / Theirs, or edit and stage),\nthen commit, or abort the merge.",
+                        "The " + (rb ? "rebase" : "merge") + " has conflicts.\nResolve them (right click: Resolve Using Mine / Theirs, or edit and stage),\nthen "
+                                + (rb ? "continue the rebase" : "commit") + ", or abort the " + (rb ? "rebase." : "merge."),
                         "Pull", JOptionPane.WARNING_MESSAGE));
             }
             return switch (r) {
@@ -813,6 +915,7 @@ public class RepoPanel extends JPanel {
                 case MERGED -> "merged";
                 case REBASED -> "rebased";
                 case CONFLICTS -> "merge has conflicts";
+                case REBASE_CONFLICTS -> "rebase stopped by conflicts";
             };
         });
     }
