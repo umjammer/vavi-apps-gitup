@@ -53,7 +53,7 @@ public final class CommitLog implements AutoCloseable {
     private boolean done;
     private final GraphLayout layout = new GraphLayout();
 
-    CommitLog(GitRepo repo) {
+    CommitLog(GitRepo repo, boolean workingCopy) {
         this.repo = repo;
         PointerByReference wp = new PointerByReference();
         check(git.git_revwalk_new(wp, repo.handle()), "revwalk");
@@ -63,6 +63,8 @@ public final class CommitLog implements AutoCloseable {
         git.git_revwalk_push_glob(walk, "refs/heads");
         git.git_revwalk_push_glob(walk, "refs/remotes");
         git.git_revwalk_push_glob(walk, "refs/tags");
+        // lane 0 connects the "Uncommitted changes" row to HEAD
+        if (workingCopy && !repo.isHeadUnborn()) layout.expect(repo.revparse("HEAD"));
     }
 
     public boolean isDone() {
@@ -136,6 +138,11 @@ public final class CommitLog implements AutoCloseable {
             }
             while (!lanes.isEmpty() && lanes.getLast() == null) lanes.removeLast();
             return new Step(lane, before, lanes.toArray(String[]::new));
+        }
+
+        /** reserves a lane expecting the commit */
+        void expect(String oid) {
+            lanes.set(allocate(), oid);
         }
 
         private int allocate() {

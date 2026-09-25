@@ -23,6 +23,7 @@ import javax.swing.tree.DefaultTreeModel;
 import javax.swing.tree.TreePath;
 
 import vavi.apps.gitup.model.GitRepo.Ref;
+import vavi.apps.gitup.model.GitRepo.Stash;
 
 
 /**
@@ -37,12 +38,15 @@ public class SidebarPanel extends JPanel {
         void checkout(Ref ref);
         /** jumps to the commit in the log */
         void reveal(Ref ref);
+        void stashApply(Stash stash, boolean drop);
+        void stashDrop(Stash stash);
     }
 
     private final DefaultMutableTreeNode root = new DefaultMutableTreeNode("repository");
     private final DefaultMutableTreeNode branches = new DefaultMutableTreeNode("BRANCHES");
     private final DefaultMutableTreeNode remotes = new DefaultMutableTreeNode("REMOTES");
     private final DefaultMutableTreeNode tags = new DefaultMutableTreeNode("TAGS");
+    private final DefaultMutableTreeNode stashes = new DefaultMutableTreeNode("STASHES");
     private final DefaultTreeModel model = new DefaultTreeModel(root);
     private final JTree tree = new JTree(model);
     private String headBranch;
@@ -53,12 +57,19 @@ public class SidebarPanel extends JPanel {
         root.add(branches);
         root.add(remotes);
         root.add(tags);
+        root.add(stashes);
         tree.setRootVisible(false);
         tree.setShowsRootHandles(true);
         tree.setCellRenderer(new Renderer());
+        javax.swing.ToolTipManager.sharedInstance().registerComponent(tree);
         tree.addMouseListener(new MouseAdapter() {
             @Override public void mousePressed(MouseEvent e) {
                 if (e.isPopupTrigger()) { popup(e); return; }
+                Stash stash = stashAt(e);
+                if (stash != null && e.getClickCount() == 2 && listener != null) {
+                    listener.stashApply(stash, false);
+                    return;
+                }
                 Ref ref = refAt(e);
                 if (ref == null || listener == null) return;
                 if (e.getClickCount() == 2) listener.checkout(ref);
@@ -87,9 +98,25 @@ public class SidebarPanel extends JPanel {
                 default -> {}
             }
         }
-        model.reload();
+        model.reload(branches);
+        model.reload(remotes);
+        model.reload(tags);
         tree.expandPath(new TreePath(branches.getPath()));
         tree.expandPath(new TreePath(remotes.getPath()));
+    }
+
+    public void setStashes(List<Stash> list) {
+        stashes.removeAllChildren();
+        for (Stash s : list) stashes.add(new DefaultMutableTreeNode(s));
+        model.reload(stashes);
+        tree.expandPath(new TreePath(stashes.getPath()));
+    }
+
+    private Stash stashAt(MouseEvent e) {
+        TreePath p = tree.getPathForLocation(e.getX(), e.getY());
+        if (p == null) return null;
+        Object o = ((DefaultMutableTreeNode) p.getLastPathComponent()).getUserObject();
+        return o instanceof Stash s ? s : null;
     }
 
     private Ref refAt(MouseEvent e) {
@@ -100,6 +127,11 @@ public class SidebarPanel extends JPanel {
     }
 
     private void popup(MouseEvent e) {
+        Stash stash = stashAt(e);
+        if (stash != null) {
+            stashPopup(e, stash);
+            return;
+        }
         Ref ref = refAt(e);
         if (ref == null) return;
         tree.setSelectionPath(tree.getPathForLocation(e.getX(), e.getY()));
@@ -121,12 +153,39 @@ public class SidebarPanel extends JPanel {
         menu.show(tree, e.getX(), e.getY());
     }
 
+    private void stashPopup(MouseEvent e, Stash stash) {
+        tree.setSelectionPath(tree.getPathForLocation(e.getX(), e.getY()));
+        JPopupMenu menu = new JPopupMenu();
+        JMenuItem apply = new JMenuItem("Apply Stash");
+        apply.addActionListener(ev -> { if (listener != null) listener.stashApply(stash, false); });
+        menu.add(apply);
+        JMenuItem pop = new JMenuItem("Apply and Delete (Pop)");
+        pop.addActionListener(ev -> { if (listener != null) listener.stashApply(stash, true); });
+        menu.add(pop);
+        JMenuItem drop = new JMenuItem("Delete Stash…");
+        drop.addActionListener(ev -> { if (listener != null) listener.stashDrop(stash); });
+        menu.add(drop);
+        menu.addSeparator();
+        JMenuItem copy = new JMenuItem("Copy Message");
+        copy.addActionListener(ev -> LogPanel.copy(stash.message()));
+        menu.add(copy);
+        JMenuItem copyOid = new JMenuItem("Copy SHA");
+        copyOid.addActionListener(ev -> LogPanel.copy(stash.oid()));
+        menu.add(copyOid);
+        menu.show(tree, e.getX(), e.getY());
+    }
+
     private class Renderer extends DefaultTreeCellRenderer {
         @Override
         public Component getTreeCellRendererComponent(JTree t, Object v, boolean sel, boolean exp, boolean leaf, int row, boolean focus) {
             super.getTreeCellRendererComponent(t, v, sel, exp, leaf, row, focus);
             Object o = ((DefaultMutableTreeNode) v).getUserObject();
-            if (o instanceof Ref r) {
+            if (o instanceof Stash st) {
+                setText(st.message());
+                setFont(t.getFont());
+                setIcon(null);
+                setToolTipText("stash@{" + st.index() + "} " + st.oid().substring(0, 7));
+            } else if (o instanceof Ref r) {
                 boolean head = r.kind() == Ref.Kind.LOCAL && r.shorthand().equals(headBranch);
                 setText(r.shorthand());
                 setFont(t.getFont().deriveFont(head ? Font.BOLD : Font.PLAIN));

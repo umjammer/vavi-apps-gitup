@@ -85,7 +85,7 @@ class RemoteOpsTest {
         try (RemoteOps ops = new RemoteOps(b, NO_PROMPT, System.err::println);
              GitRepo repo = new GitRepo(b)) {
             ops.fetchAll();
-            assertTrue(repo.fastForwardToUpstream());
+            assertEquals(GitRepo.PullResult.FAST_FORWARD, repo.pullFromUpstream());
         }
         assertEquals("2\n", Files.readString(b.resolve("f.txt")));
         assertEquals(sh(a, "rev-parse", "HEAD"), sh(b, "rev-parse", "HEAD"));

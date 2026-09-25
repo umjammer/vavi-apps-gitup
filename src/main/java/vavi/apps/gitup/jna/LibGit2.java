@@ -231,6 +231,47 @@ public interface LibGit2 extends Library {
         return m;
     }
 
+    // merge
+
+    int GIT_REPOSITORY_STATE_NONE = 0;
+    int GIT_REPOSITORY_STATE_MERGE = 1;
+
+    int GIT_MERGE_ANALYSIS_NORMAL = 1 << 0;
+    int GIT_MERGE_ANALYSIS_UP_TO_DATE = 1 << 1;
+    int GIT_MERGE_ANALYSIS_FASTFORWARD = 1 << 2;
+    int GIT_MERGE_ANALYSIS_UNBORN = 1 << 3;
+
+    int GIT_CHECKOUT_ALLOW_CONFLICTS = 1 << 4;
+
+    int git_annotated_commit_lookup(PointerByReference out, Pointer repo, GitOid id);
+    void git_annotated_commit_free(Pointer commit);
+    int git_merge_analysis(IntByReference analysis, IntByReference preference, Pointer repo, Pointer[] theirHeads, NativeLong len);
+    int git_merge(Pointer repo, Pointer[] theirHeads, NativeLong len, Pointer mergeOpts, Pointer checkoutOpts);
+    int git_repository_state_cleanup(Pointer repo);
+    int git_reset(Pointer repo, Pointer target, int resetType, Pointer checkoutOpts);
+
+    // stash
+
+    int GIT_STASH_KEEP_INDEX = 1 << 0;
+    int GIT_STASH_INCLUDE_UNTRACKED = 1 << 1;
+
+    interface StashCallback extends com.sun.jna.Callback {
+        int invoke(NativeLong index, String message, Pointer stashId, Pointer payload);
+    }
+
+    int git_stash_save(GitOid out, Pointer repo, Pointer stasher, String message, int flags);
+    int git_stash_apply(Pointer repo, NativeLong index, Pointer options);
+    int git_stash_pop(Pointer repo, NativeLong index, Pointer options);
+    int git_stash_drop(Pointer repo, NativeLong index);
+    int git_stash_foreach(Pointer repo, StashCallback callback, Pointer payload);
+
+    // config / ignore
+
+    int git_repository_config_snapshot(PointerByReference out, Pointer repo);
+    int git_config_get_string(PointerByReference out, Pointer cfg, String name);
+    void git_config_free(Pointer cfg);
+    int git_ignore_path_is_ignored(IntByReference ignored, Pointer repo, String path);
+
     // revwalk
 
     int git_revwalk_new(PointerByReference out, Pointer repo);
@@ -253,6 +294,8 @@ public interface LibGit2 extends Library {
     Pointer git_commit_parent_id(Pointer commit, int n);
     int git_commit_tree(PointerByReference out, Pointer commit);
     void git_commit_free(Pointer commit);
+    int git_commit_amend(GitOid id, Pointer commitToAmend, String updateRef, Pointer author, Pointer committer,
+                         String encoding, String message, Pointer tree);
     int git_commit_create(GitOid id, Pointer repo, String updateRef, Pointer author, Pointer committer,
                           String encoding, String message, Pointer tree, NativeLong parentCount, Pointer[] parents);
 

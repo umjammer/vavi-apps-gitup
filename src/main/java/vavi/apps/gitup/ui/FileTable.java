@@ -55,6 +55,12 @@ public class FileTable extends JTable {
         /** move files to the other side (stage when unstaged, unstage when staged) */
         void move(FileTable source, List<FileChange> files);
         void discard(List<FileChange> files);
+        /** git rm --cached */
+        void stopTracking(List<FileChange> files);
+        /** shows the ignore dialog */
+        void ignore(List<FileChange> files);
+        /** moves the working copy files to the trash */
+        void trash(List<FileChange> files);
     }
 
     /** the "Files" table of a commit has no checkbox and no actions */
@@ -99,7 +105,7 @@ public class FileTable extends JTable {
         getColumnModel().getColumn(c + 1).setCellRenderer(new PathRenderer());
 
         if (checkable) {
-            setDragEnabled(true);
+            if (!java.awt.GraphicsEnvironment.isHeadless()) setDragEnabled(true);
             setDropMode(DropMode.ON);
             setTransferHandler(new Handler());
         }
@@ -161,9 +167,15 @@ public class FileTable extends JTable {
         List<FileChange> files = selectedFiles();
         if (files.isEmpty()) return;
         JPopupMenu menu = new JPopupMenu();
-        if (checkable) {
+        if (checkable && listener != null) {
             item(menu, staged ? "Unstage" : "Stage", () -> fireMove(files));
-            if (!staged) item(menu, "Discard Changes…", () -> { if (listener != null) listener.discard(files); });
+            if (!staged) item(menu, "Discard Changes…", () -> listener.discard(files));
+            menu.addSeparator();
+            boolean tracked = files.stream().anyMatch(f -> f.kind() != FileChange.Kind.UNTRACKED && f.kind() != FileChange.Kind.ADDED);
+            item(menu, "Stop Tracking", () -> listener.stopTracking(files)).setEnabled(tracked);
+            item(menu, "Ignore…", () -> listener.ignore(files));
+            boolean exists = workdir != null && files.stream().anyMatch(f -> java.nio.file.Files.exists(workdir.resolve(f.path())));
+            item(menu, "Move to Trash…", () -> listener.trash(files)).setEnabled(exists);
             menu.addSeparator();
         }
         item(menu, "Copy Path", () -> copy(files, false));
@@ -180,10 +192,11 @@ public class FileTable extends JTable {
         menu.show(this, e.getX(), e.getY());
     }
 
-    private static void item(JPopupMenu menu, String label, Runnable r) {
+    private static JMenuItem item(JPopupMenu menu, String label, Runnable r) {
         JMenuItem i = new JMenuItem(label);
         i.addActionListener(e -> r.run());
         menu.add(i);
+        return i;
     }
 
     private void copy(List<FileChange> files, boolean full) {
@@ -272,7 +285,7 @@ public class FileTable extends JTable {
     }
 
     /** drag rows from one table onto the other */
-    private class Handler extends TransferHandler {
+    class Handler extends TransferHandler {
         @Override public int getSourceActions(JComponent c) { return MOVE; }
 
         @Override protected Transferable createTransferable(JComponent c) {

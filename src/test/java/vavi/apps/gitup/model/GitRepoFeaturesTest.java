@@ -1,0 +1,253 @@
+/*
+ * Copyright (c) 2026 by Naohide Sano, All rights reserved.
+ *
+ * Programmed by Naohide Sano
+ */
+
+package vavi.apps.gitup.model;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIf;
+import org.junit.jupiter.api.io.TempDir;
+
+import vavi.apps.gitup.jna.GitUpKitLocator;
+import vavi.apps.gitup.model.CommitLog.CommitRow;
+import vavi.apps.gitup.model.GitRepo.IgnorePatterns;
+import vavi.apps.gitup.model.GitRepo.IgnoreTarget;
+import vavi.apps.gitup.model.GitRepo.PullResult;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+
+/**
+ * merge on pull, amend, stash, stop tracking, ignore, graph lane to HEAD.
+ *
+ * @author <a href="mailto:umjammer@gmail.com">Naohide Sano</a> (nsano)
+ * @version 0.00 2026-09-25 nsano initial version <br>
+ */
+@EnabledIf("frameworkExists")
+class GitRepoFeaturesTest {
+
+    static boolean frameworkExists() {
+        return GitUpKitLocator.find() != null;
+    }
+
+    @TempDir
+    Path dir;
+
+    String sh(Path cwd, String... args) throws IOException, InterruptedException {
+        List<String> cmd = new ArrayList<>(List.of("git", "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "core.excludesFile=" + dir.resolve("global-ignore")));
+        cmd.addAll(List.of(args));
+        Process p = new ProcessBuilder(cmd).directory(cwd.toFile()).redirectErrorStream(true).start();
+        String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        assertEquals(0, p.waitFor(), out);
+        return out;
+    }
+
+    /** a clone "b" whose main tracks origin/main of a bare "remote.git", both with one commit */
+    Path setupClone() throws Exception {
+        Path bare = dir.resolve("remote.git");
+        Path a = dir.resolve("a");
+        Files.createDirectories(bare);
+        sh(bare, "init", "-q", "--bare", "-b", "main");
+        sh(dir, "clone", "-q", bare.toString(), "a");
+        sh(a, "checkout", "-q", "-b", "main");
+        Files.writeString(a.resolve("f.txt"), "1\n2\n3\n4\n5\n");
+        sh(a, "add", "f.txt");
+        sh(a, "commit", "-q", "-m", "one");
+        sh(a, "push", "-q", "-u", "origin", "main");
+        sh(dir, "clone", "-q", bare.toString(), "b");
+        Path b = dir.resolve("b");
+        sh(b, "config", "user.name", "t");
+        sh(b, "config", "user.email", "t@example.com");
+        return b;
+    }
+
+    /** someone else pushes a change of line n */
+    void pushFromA(int line, String text) throws Exception {
+        Path a = dir.resolve("a");
+        List<String> lines = new ArrayList<>(Files.readAllLines(a.resolve("f.txt")));
+        lines.set(line - 1, text);
+        Files.writeString(a.resolve("f.txt"), String.join("\n", lines) + "\n");
+        sh(a, "commit", "-q", "-am", "a: " + text);
+        sh(a, "push", "-q");
+    }
+
+    void commitInB(Path b, int line, String text) throws Exception {
+        List<String> lines = new ArrayList<>(Files.readAllLines(b.resolve("f.txt")));
+        lines.set(line - 1, text);
+        Files.writeString(b.resolve("f.txt"), String.join("\n", lines) + "\n");
+        sh(b, "commit", "-q", "-am", "b: " + text);
+    }
+
+    @Test
+    void pullMerge() throws Exception {
+        Path b = setupClone();
+        pushFromA(1, "one");
+        commitInB(b, 5, "five");
+        sh(b, "fetch", "-q");
+        try (GitRepo repo = new GitRepo(b)) {
+            assertEquals(PullResult.MERGED, repo.pullFromUpstream());
+            assertEquals(GitRepo.State.NONE, repo.state());
+        }
+        assertEquals("one\n2\n3\n4\nfive\n", Files.readString(b.resolve("f.txt")));
+        assertEquals(3, sh(b, "log", "-1", "--format=%P %H").trim().split(" ").length, "merge commit has 2 parents");
+        assertEquals("", sh(b, "status", "--porcelain"));
+    }
+
+    @Test
+    void pullConflictThenCommit() throws Exception {
+        Path b = setupClone();
+        pushFromA(3, "THREE-A");
+        commitInB(b, 3, "THREE-B");
+        sh(b, "fetch", "-q");
+        try (GitRepo repo = new GitRepo(b)) {
+            assertEquals(PullResult.CONFLICTS, repo.pullFromUpstream());
+            assertEquals(GitRepo.State.MERGE, repo.state());
+            assertTrue(repo.status().unstaged().stream().anyMatch(f -> f.kind() == FileChange.Kind.CONFLICTED));
+            assertTrue(repo.mergeMessage().startsWith("Merge"), repo.mergeMessage());
+
+            Files.writeString(b.resolve("f.txt"), "1\n2\nTHREE\n4\n5\n");
+            repo.stage(List.of(new FileChange("f.txt", "f.txt", FileChange.Kind.MODIFIED, false)));
+            repo.commit("merged\n");
+            assertEquals(GitRepo.State.NONE, repo.state());
+        }
+        assertEquals(3, sh(b, "log", "-1", "--format=%P %H").trim().split(" ").length);
+    }
+
+    @Test
+    void abortMerge() throws Exception {
+        Path b = setupClone();
+        pushFromA(3, "THREE-A");
+        commitInB(b, 3, "THREE-B");
+        sh(b, "fetch", "-q");
+        try (GitRepo repo = new GitRepo(b)) {
+            assertEquals(PullResult.CONFLICTS, repo.pullFromUpstream());
+            repo.abortMerge();
+            assertEquals(GitRepo.State.NONE, repo.state());
+        }
+        assertEquals("", sh(b, "status", "--porcelain"));
+        assertEquals("1\n2\nTHREE-B\n4\n5\n", Files.readString(b.resolve("f.txt")));
+    }
+
+    @Test
+    void pullUpToDate() throws Exception {
+        Path b = setupClone();
+        try (GitRepo repo = new GitRepo(b)) {
+            assertEquals(PullResult.UP_TO_DATE, repo.pullFromUpstream());
+        }
+    }
+
+    @Test
+    void amend() throws Exception {
+        Path b = setupClone();
+        String before = sh(b, "rev-parse", "HEAD").trim();
+        Files.writeString(b.resolve("g.txt"), "g\n");
+        try (GitRepo repo = new GitRepo(b)) {
+            assertEquals("one\n", repo.headMessage());
+            repo.stage(repo.status().unstaged());
+            repo.amend("one amended\n");
+        }
+        assertEquals("one amended", sh(b, "log", "-1", "--format=%s").trim());
+        assertEquals("1", sh(b, "rev-list", "--count", "HEAD").trim(), "replaced, not added");
+        assertFalse(before.equals(sh(b, "rev-parse", "HEAD").trim()));
+        assertTrue(sh(b, "show", "--name-only", "--format=").contains("g.txt"));
+    }
+
+    @Test
+    void stash() throws Exception {
+        Path b = setupClone();
+        Files.writeString(b.resolve("f.txt"), "changed\n");
+        Files.writeString(b.resolve("u.txt"), "untracked\n");
+        try (GitRepo repo = new GitRepo(b)) {
+            assertTrue(repo.stashSave("wip", false, true));
+            assertEquals("", sh(b, "status", "--porcelain"));
+            List<GitRepo.Stash> list = repo.stashes();
+            assertEquals(1, list.size());
+            assertTrue(list.getFirst().message().contains("wip"), list.getFirst().message());
+            assertFalse(repo.stashSave("nothing", false, false), "nothing to stash");
+            repo.stashApply(0);
+            assertEquals("changed\n", Files.readString(b.resolve("f.txt")));
+            assertEquals(1, repo.stashes().size());
+            repo.discard(repo.status().unstaged());
+            repo.stashPop(0);
+            assertEquals(0, repo.stashes().size());
+            assertEquals("untracked\n", Files.readString(b.resolve("u.txt")));
+        }
+    }
+
+    @Test
+    void stopTracking() throws Exception {
+        Path b = setupClone();
+        try (GitRepo repo = new GitRepo(b)) {
+            repo.stopTracking(List.of(new FileChange("f.txt", "f.txt", FileChange.Kind.MODIFIED, false)));
+        }
+        assertTrue(Files.exists(b.resolve("f.txt")));
+        assertEquals("D  f.txt\n?? f.txt\n", sh(b, "status", "--porcelain"));
+    }
+
+    @Test
+    void ignorePatterns() {
+        assertEquals("/src/a.log", IgnorePatterns.exact("src/a.log"));
+        assertEquals("*.log", IgnorePatterns.extension("src/a.log"));
+        assertNull(IgnorePatterns.extension("src/Makefile"));
+        assertNull(IgnorePatterns.extension(".env"));
+        assertEquals("/src/build/", IgnorePatterns.beneath("src/build"));
+        assertEquals(List.of("a/b", "a"), IgnorePatterns.parents("a/b/c.txt"));
+        assertEquals("/\\#x\\[1]\\*", IgnorePatterns.exact("#x[1]*"));
+        assertEquals("/a\\ ", IgnorePatterns.exact("a "));
+    }
+
+    @Test
+    void ignore() throws Exception {
+        Path b = setupClone();
+        Files.createDirectories(b.resolve("build"));
+        Files.writeString(b.resolve("build/x.o"), "x");
+        Files.writeString(b.resolve("a.log"), "x");
+        Files.writeString(b.resolve("keep.txt"), "x");
+        try (GitRepo repo = new GitRepo(b)) {
+            assertFalse(repo.isIgnored("a.log"));
+            repo.ignore(IgnorePatterns.extension("a.log"), IgnoreTarget.REPOSITORY);
+            repo.ignore(IgnorePatterns.beneath("build"), IgnoreTarget.LOCAL);
+            repo.ignore(IgnorePatterns.beneath("build"), IgnoreTarget.LOCAL); // no duplicate
+            assertTrue(repo.isIgnored("a.log"));
+            assertTrue(repo.isIgnored("build/x.o"));
+            assertEquals(b.resolve(".gitignore").toRealPath(), repo.ignoreFile(IgnoreTarget.REPOSITORY).toRealPath());
+        }
+        assertEquals("*.log\n", Files.readString(b.resolve(".gitignore")));
+        assertTrue(Files.readString(b.resolve(".git/info/exclude")).endsWith("/build/\n"));
+        assertEquals(1, Files.readString(b.resolve(".git/info/exclude")).lines().filter("/build/"::equals).count());
+        String status = sh(b, "status", "--porcelain");
+        assertFalse(status.contains("a.log"), status);
+        assertFalse(status.contains("build"), status);
+        assertTrue(status.contains("keep.txt"), status);
+    }
+
+    /** with a working copy row, HEAD's row starts with an edge from the top in lane 0 */
+    @Test
+    void graphLaneToHead() throws Exception {
+        Path b = setupClone();
+        sh(b, "checkout", "-q", "-b", "topic");
+        commitInB(b, 2, "two");
+        sh(b, "checkout", "-q", "main");
+        try (GitRepo repo = new GitRepo(b); CommitLog log = repo.log(true)) {
+            List<CommitRow> rows = log.next(10);
+            String head = repo.headOid();
+            // topic's commit comes first and passes lane 0 through, then HEAD in lane 0
+            assertEquals(head, rows.getFirst().before()[0]);
+            CommitRow headRow = rows.stream().filter(r -> r.oid().equals(head)).findFirst().orElseThrow();
+            assertEquals(0, headRow.lane());
+            assertEquals(head, headRow.before()[0]);
+        }
+    }
+}

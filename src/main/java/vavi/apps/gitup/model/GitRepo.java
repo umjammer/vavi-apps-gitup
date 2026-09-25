@@ -20,6 +20,7 @@ import java.util.Map;
 
 import com.sun.jna.NativeLong;
 import com.sun.jna.Pointer;
+import com.sun.jna.ptr.IntByReference;
 import com.sun.jna.ptr.PointerByReference;
 
 import vavi.apps.gitup.jna.LibGit2;
@@ -77,6 +78,11 @@ public class GitRepo implements AutoCloseable {
 
     public Path workdir() {
         return workdir;
+    }
+
+    /** the .git directory */
+    public Path gitDir() {
+        return Path.of(git.git_repository_path(handle()));
     }
 
     @Override
@@ -445,37 +451,110 @@ public class GitRepo implements AutoCloseable {
 
     // commit
 
-    /** commits the index on HEAD, @return new commit id */
-    public String commit(String message) {
+    /** repository state */
+    public enum State { NONE, MERGE, OTHER }
+
+    public State state() {
+        int s = git.git_repository_state(handle());
+        return s == GIT_REPOSITORY_STATE_NONE ? State.NONE : s == GIT_REPOSITORY_STATE_MERGE ? State.MERGE : State.OTHER;
+    }
+
+    /** @return .git/MERGE_MSG, null when none */
+    public String mergeMessage() {
+        Path p = Path.of(git.git_repository_path(handle())).resolve("MERGE_MSG");
+        try {
+            return Files.exists(p) ? Files.readString(p) : null;
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    /** @return the message of HEAD, null when unborn */
+    public String headMessage() {
+        if (isHeadUnborn()) return null;
+        Pointer c = lookupCommit(revparse("HEAD"));
+        try {
+            return git.git_commit_message(c);
+        } finally {
+            git.git_commit_free(c);
+        }
+    }
+
+    private Pointer writeIndexTree() {
         Pointer index = index();
         GitOid treeId = new GitOid();
         try {
-            if (git.git_index_has_conflicts(index) == 1) throw new GitException("unresolved conflicts in the index");
+            if (git.git_index_has_conflicts(index) == 1) throw new GitException("unresolved conflicts, stage the resolved files first");
             check(git.git_index_write_tree(treeId, index), "write tree");
         } finally {
             git.git_index_free(index);
         }
         PointerByReference tp = new PointerByReference();
         check(git.git_tree_lookup(tp, handle(), treeId), "tree");
-        Pointer tree = tp.getValue();
+        return tp.getValue();
+    }
+
+    private Pointer signature() {
         PointerByReference sp = new PointerByReference();
-        Pointer parent = null;
+        check(git.git_signature_default(sp, handle()), "signature (set user.name and user.email)");
+        return sp.getValue();
+    }
+
+    /**
+     * commits the index on HEAD. while merging, MERGE_HEAD becomes the second parent
+     * and the merge state is cleaned up.
+     *
+     * @return new commit id
+     */
+    public String commit(String message) {
+        boolean merging = state() == State.MERGE;
+        Pointer tree = writeIndexTree();
+        Pointer sig = null;
+        List<Pointer> parents = new ArrayList<>();
         try {
-            check(git.git_signature_default(sp, handle()), "signature (set user.name and user.email)");
-            Pointer[] parents = new Pointer[0];
-            if (!isHeadUnborn()) {
-                parent = lookupCommit(revparse("HEAD"));
-                parents = new Pointer[] {parent};
-            }
+            sig = signature();
+            if (!isHeadUnborn()) parents.add(lookupCommit(revparse("HEAD")));
+            if (merging) parents.add(lookupCommit(revparse("MERGE_HEAD")));
             GitOid id = new GitOid();
-            check(git.git_commit_create(id, handle(), "HEAD", sp.getValue(), sp.getValue(), null, message, tree,
-                    new NativeLong(parents.length), parents.length == 0 ? null : parents), "commit");
+            check(git.git_commit_create(id, handle(), "HEAD", sig, sig, null, message, tree,
+                    new NativeLong(parents.size()), parents.isEmpty() ? null : parents.toArray(Pointer[]::new)), "commit");
+            if (merging) git.git_repository_state_cleanup(handle());
             return id.hex();
         } finally {
-            if (parent != null) git.git_commit_free(parent);
-            if (sp.getValue() != null) git.git_signature_free(sp.getValue());
+            parents.forEach(git::git_commit_free);
+            if (sig != null) git.git_signature_free(sig);
             git.git_tree_free(tree);
         }
+    }
+
+    /** replaces HEAD with a commit of the index and the message (author is kept), @return new commit id */
+    public String amend(String message) {
+        if (isHeadUnborn()) throw new GitException("nothing to amend");
+        Pointer tree = writeIndexTree();
+        Pointer sig = null;
+        Pointer head = lookupCommit(revparse("HEAD"));
+        try {
+            sig = signature();
+            GitOid id = new GitOid();
+            check(git.git_commit_amend(id, head, "HEAD", null, sig, null, message, tree), "amend");
+            return id.hex();
+        } finally {
+            git.git_commit_free(head);
+            if (sig != null) git.git_signature_free(sig);
+            git.git_tree_free(tree);
+        }
+    }
+
+    /** aborts a merge in progress: hard reset to HEAD and cleans up the merge state */
+    public void abortMerge() {
+        PointerByReference op = new PointerByReference();
+        check(git.git_revparse_single(op, handle(), "HEAD"), "HEAD");
+        try {
+            check(git.git_reset(handle(), op.getValue(), GIT_RESET_HARD, null), "reset");
+        } finally {
+            git.git_object_free(op.getValue());
+        }
+        git.git_repository_state_cleanup(handle());
     }
 
     // branches
@@ -546,27 +625,52 @@ public class GitRepo implements AutoCloseable {
         }
     }
 
+    /** result of {@link #pullFromUpstream()} */
+    public enum PullResult { UP_TO_DATE, FAST_FORWARD, MERGED, CONFLICTS }
+
     /**
-     * fast-forwards the current branch to its upstream.
-     *
-     * @return false when already up to date
-     * @throws GitException when not fast-forwardable
+     * integrates the fetched upstream into the current branch: fast-forward when possible,
+     * otherwise a merge commit. on conflicts the repository is left merging.
      */
-    public boolean fastForwardToUpstream() {
+    public PullResult pullFromUpstream() {
         String branch = headBranch();
         if (branch == null || "HEAD".equals(branch)) throw new GitException("not on a branch");
         String upstream = upstream(branch);
         if (upstream == null) throw new GitException("no upstream for " + branch);
-        String head = revparse("HEAD");
+        if (state() != State.NONE) throw new GitException("finish or abort the merge in progress first");
         String target = revparse("refs/remotes/" + upstream);
-        if (head.equals(target)) return false;
-        GitOid t = new GitOid(), h = new GitOid();
+        GitOid t = new GitOid();
         git.git_oid_fromstr(t, target);
-        git.git_oid_fromstr(h, head);
-        if (git.git_graph_descendant_of(handle(), h, t) == 1) return false; // ahead
-        if (git.git_graph_descendant_of(handle(), t, h) != 1) {
-            throw new GitException(branch + " and " + upstream + " have diverged, merge is not supported yet");
+        PointerByReference ap = new PointerByReference();
+        check(git.git_annotated_commit_lookup(ap, handle(), t), "upstream");
+        Pointer[] heads = {ap.getValue()};
+        try {
+            IntByReference analysis = new IntByReference(), preference = new IntByReference();
+            check(git.git_merge_analysis(analysis, preference, handle(), heads, new NativeLong(1)), "merge analysis");
+            int a = analysis.getValue();
+            if ((a & GIT_MERGE_ANALYSIS_UP_TO_DATE) != 0) return PullResult.UP_TO_DATE;
+            if ((a & GIT_MERGE_ANALYSIS_FASTFORWARD) != 0) {
+                fastForward(branch, target, t);
+                return PullResult.FAST_FORWARD;
+            }
+            Pointer opts = LibGit2.safeCheckoutOptions();
+            opts.setInt(4, GIT_CHECKOUT_SAFE | GIT_CHECKOUT_ALLOW_CONFLICTS);
+            check(git.git_merge(handle(), heads, new NativeLong(1), null, opts), "merge");
+        } finally {
+            git.git_annotated_commit_free(ap.getValue());
         }
+        Pointer index = index();
+        try {
+            check(git.git_index_read(index, 1), "read index");
+            if (git.git_index_has_conflicts(index) == 1) return PullResult.CONFLICTS;
+        } finally {
+            git.git_index_free(index);
+        }
+        commit("Merge remote-tracking branch '" + upstream + "' into " + branch + "\n");
+        return PullResult.MERGED;
+    }
+
+    private void fastForward(String branch, String target, GitOid t) {
         PointerByReference op = new PointerByReference();
         check(git.git_revparse_single(op, handle(), target), "target");
         try {
@@ -583,13 +687,180 @@ public class GitRepo implements AutoCloseable {
         } finally {
             git.git_reference_free(rp.getValue());
         }
-        return true;
+    }
+
+    // stash
+
+    /** a stash entry, index 0 is the newest */
+    public record Stash(int index, String message, String oid) {}
+
+    public List<Stash> stashes() {
+        List<Stash> list = new ArrayList<>();
+        LibGit2.StashCallback cb = (i, message, id, payload) -> {
+            list.add(new Stash(i.intValue(), message, git.git_oid_tostr_s(id)));
+            return 0;
+        };
+        check(git.git_stash_foreach(handle(), cb, null), "stash list");
+        return list;
+    }
+
+    /** stashes the working copy changes, @return false when there was nothing to stash */
+    public boolean stashSave(String message, boolean keepIndex, boolean includeUntracked) {
+        Pointer sig = signature();
+        try {
+            int flags = (keepIndex ? GIT_STASH_KEEP_INDEX : 0) | (includeUntracked ? GIT_STASH_INCLUDE_UNTRACKED : 0);
+            int rc = git.git_stash_save(new GitOid(), handle(), sig, message == null || message.isBlank() ? null : message, flags);
+            if (rc == GIT_ENOTFOUND) return false;
+            check(rc, "stash");
+            return true;
+        } finally {
+            git.git_signature_free(sig);
+        }
+    }
+
+    public void stashApply(int index) {
+        check(git.git_stash_apply(handle(), new NativeLong(index), null), "stash apply");
+    }
+
+    public void stashPop(int index) {
+        check(git.git_stash_pop(handle(), new NativeLong(index), null), "stash pop");
+    }
+
+    public void stashDrop(int index) {
+        check(git.git_stash_drop(handle(), new NativeLong(index)), "stash drop");
+    }
+
+    // ignore / tracking
+
+    /** where an ignore pattern is written */
+    public enum IgnoreTarget {
+        /** .gitignore at the top of the working directory */
+        REPOSITORY,
+        /** .git/info/exclude, not shared */
+        LOCAL,
+        /** core.excludesFile (default ~/.config/git/ignore) */
+        GLOBAL
+    }
+
+    /** removes files from the index but keeps them in the working directory (git rm --cached) */
+    public void stopTracking(Collection<FileChange> files) {
+        Pointer index = index();
+        try {
+            for (FileChange f : files) check(git.git_index_remove_bypath(index, f.path()), "remove " + f.path());
+            check(git.git_index_write(index), "write index");
+        } finally {
+            git.git_index_free(index);
+        }
+    }
+
+    public boolean isIgnored(String path) {
+        IntByReference r = new IntByReference();
+        check(git.git_ignore_path_is_ignored(r, handle(), path), "ignored " + path);
+        return r.getValue() == 1;
+    }
+
+    /** @return the file the target stands for */
+    public Path ignoreFile(IgnoreTarget target) {
+        return switch (target) {
+            case REPOSITORY -> workdir.resolve(".gitignore");
+            case LOCAL -> Path.of(git.git_repository_path(handle())).resolve("info/exclude");
+            case GLOBAL -> globalExcludesFile();
+        };
+    }
+
+    private Path globalExcludesFile() {
+        PointerByReference cp = new PointerByReference();
+        check(git.git_repository_config_snapshot(cp, handle()), "config");
+        try {
+            PointerByReference vp = new PointerByReference();
+            if (git.git_config_get_string(vp, cp.getValue(), "core.excludesfile") == 0) {
+                String v = vp.getValue().getString(0, "UTF-8");
+                if (v.startsWith("~/")) v = System.getProperty("user.home") + v.substring(1);
+                return Path.of(v);
+            }
+        } finally {
+            git.git_config_free(cp.getValue());
+        }
+        String xdg = System.getenv("XDG_CONFIG_HOME");
+        Path base = xdg != null && !xdg.isEmpty() ? Path.of(xdg) : Path.of(System.getProperty("user.home"), ".config");
+        return base.resolve("git/ignore");
+    }
+
+    /** appends the pattern to the ignore file of the target (creating it), @return the file */
+    public Path ignore(String pattern, IgnoreTarget target) {
+        Path file = ignoreFile(target);
+        try {
+            Files.createDirectories(file.getParent());
+            String current = Files.exists(file) ? Files.readString(file) : "";
+            if (current.lines().anyMatch(pattern::equals)) return file;
+            String prefix = current.isEmpty() || current.endsWith("\n") ? "" : "\n";
+            Files.writeString(file, current + prefix + pattern + "\n");
+            return file;
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    /** SourceTree's ways to ignore a file, as patterns */
+    public static final class IgnorePatterns {
+        private IgnorePatterns() {}
+
+        /** the exact file, anchored at the top */
+        public static String exact(String path) {
+            return "/" + escape(path);
+        }
+
+        /** every file with the same extension, null when the file has none */
+        public static String extension(String path) {
+            String name = path.substring(path.lastIndexOf('/') + 1);
+            int dot = name.lastIndexOf('.');
+            return dot <= 0 || dot == name.length() - 1 ? null : "*" + escape(name.substring(dot));
+        }
+
+        /** everything beneath the directory ("a/b" -> "/a/b/") */
+        public static String beneath(String dir) {
+            return "/" + escape(dir) + "/";
+        }
+
+        /** parent directories of the path, nearest first ("a/b/c.txt" -> ["a/b", "a"]) */
+        public static List<String> parents(String path) {
+            List<String> list = new ArrayList<>();
+            for (int i = path.lastIndexOf('/'); i > 0; i = path.lastIndexOf('/', i - 1)) list.add(path.substring(0, i));
+            return list;
+        }
+
+        /** escapes glob characters, a leading '#' or '!' and trailing spaces */
+        static String escape(String s) {
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < s.length(); i++) {
+                char c = s.charAt(i);
+                if (c == '*' || c == '?' || c == '[' || c == '\\') sb.append('\\');
+                else if (i == 0 && (c == '#' || c == '!')) sb.append('\\');
+                sb.append(c);
+            }
+            int e = sb.length();
+            while (e > 0 && sb.charAt(e - 1) == ' ') e--;
+            if (e < sb.length()) {
+                String tail = sb.substring(e).replace(" ", "\\ ");
+                sb.setLength(e);
+                sb.append(tail);
+            }
+            return sb.toString();
+        }
     }
 
     // log
 
     /** @return a new history walker over all refs */
     public CommitLog log() {
-        return new CommitLog(this);
+        return new CommitLog(this, false);
+    }
+
+    /**
+     * @param workingCopy true when an "Uncommitted changes" row is shown above,
+     *                    the graph then starts with a lane leading to HEAD
+     */
+    public CommitLog log(boolean workingCopy) {
+        return new CommitLog(this, workingCopy);
     }
 }

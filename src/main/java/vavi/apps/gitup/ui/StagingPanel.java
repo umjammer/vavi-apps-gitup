@@ -8,13 +8,13 @@ package vavi.apps.gitup.ui;
 
 import java.awt.BorderLayout;
 import java.awt.CardLayout;
-import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.event.ActionEvent;
 import java.awt.event.KeyEvent;
 import javax.swing.AbstractAction;
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
+import javax.swing.JCheckBox;
 import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
@@ -47,6 +47,9 @@ public class StagingPanel extends JPanel {
     final JButton commitButton = new JButton("Commit");
     final JButton stageAllButton = new JButton("Stage All");
     final JButton unstageAllButton = new JButton("Unstage All");
+    final JCheckBox amendBox = new JCheckBox("Amend last commit");
+    final JButton abortMergeButton = new JButton("Abort Merge");
+    private final JPanel mergeBanner = new JPanel(new BorderLayout(6, 0));
 
     private final JLabel stagedLabel = new JLabel();
     private final JLabel unstagedLabel = new JLabel();
@@ -73,11 +76,25 @@ public class StagingPanel extends JPanel {
         });
         JPanel commitBox = new JPanel(new BorderLayout(4, 4));
         commitBox.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
-        commitBox.add(new JScrollPane(message), BorderLayout.CENTER);
-        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
+        JScrollPane messageScroll = new JScrollPane(message);
+        messageScroll.setMinimumSize(new java.awt.Dimension(100, 72));
+        messageScroll.setPreferredSize(new java.awt.Dimension(300, 90));
+        commitBox.add(messageScroll, BorderLayout.CENTER);
+        JPanel buttons = new JPanel(new BorderLayout());
         commitButton.setToolTipText("Commit staged files (⌘↩)");
-        buttons.add(commitButton);
+        amendBox.setToolTipText("Replace the last commit with the staged files and this message");
+        buttons.add(amendBox, BorderLayout.WEST);
+        buttons.add(commitButton, BorderLayout.EAST);
         commitBox.add(buttons, BorderLayout.SOUTH);
+
+        JLabel mergeLabel = new JLabel("Merging: resolve conflicts, stage the files, then commit.");
+        mergeBanner.setBorder(BorderFactory.createEmptyBorder(4, 6, 4, 4));
+        mergeBanner.setBackground(new java.awt.Color(0xfff4ce));
+        mergeLabel.setForeground(java.awt.Color.darkGray);
+        mergeBanner.add(mergeLabel, BorderLayout.CENTER);
+        mergeBanner.add(abortMergeButton, BorderLayout.EAST);
+        mergeBanner.setVisible(false);
+        commitBox.add(mergeBanner, BorderLayout.NORTH);
 
         JSplitPane working = new JSplitPane(JSplitPane.VERTICAL_SPLIT, lists, commitBox);
         working.setResizeWeight(1);
@@ -115,6 +132,14 @@ public class StagingPanel extends JPanel {
         unstagedLabel.setText("Unstaged files (" + unstaged + ")");
         stageAllButton.setEnabled(unstaged > 0);
         unstageAllButton.setEnabled(staged > 0);
+    }
+
+    /** shows the merge banner, disables amend while merging */
+    public void setMerging(boolean merging) {
+        mergeBanner.setVisible(merging);
+        amendBox.setEnabled(!merging);
+        if (merging) amendBox.setSelected(false);
+        commitButton.setText(merging ? "Commit Merge" : "Commit");
     }
 
     public void showWorking() {
