@@ -24,8 +24,39 @@
         <configuration>
           <argLine>
             -Djava.util.logging.config.file=${project.build.testOutputDirectory}/logging.properties
+            --enable-native-access=ALL-UNNAMED
+            -Djava.awt.headless=true
           </argLine>
           <trimStackTrace>false</trimStackTrace>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <version>3.4.2</version>
+        <configuration>
+          <archive>
+            <manifest>
+              <mainClass>vavi.apps.gitup.Main</mainClass>
+            </manifest>
+          </archive>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>exec-maven-plugin</artifactId>
+        <version>3.5.0</version>
+        <configuration>
+          <executable>java</executable>
+          <arguments>
+            <argument>--enable-native-access=ALL-UNNAMED</argument>
+            <argument>-Dapple.laf.useScreenMenuBar=true</argument>
+            <argument>-Djava.util.logging.config.file=${project.basedir}/src/test/resources/logging.properties</argument>
+            <argument>-cp</argument>
+            <classpath/>
+            <argument>vavi.apps.gitup.Main</argument>
+            <argument>${repo}</argument>
+          </arguments>
         </configuration>
       </plugin>
     </plugins>
@@ -50,7 +81,32 @@
     </dependencies>
   </dependencyManagement>
 
+  <properties>
+    <repo>.</repo>
+  </properties>
+
   <dependencies>
+    <dependency>
+      <groupId>net.java.dev.jna</groupId>
+      <artifactId>jna</artifactId>
+      <version>5.18.1</version>
+    </dependency>
+    <dependency>
+      <groupId>com.github.umjammer.rococoa</groupId>
+      <artifactId>rococoa-core</artifactId>
+      <version>0.8.16</version>
+    </dependency>
+    <dependency>
+      <groupId>com.formdev</groupId>
+      <artifactId>flatlaf</artifactId>
+      <version>3.5</version>
+    </dependency>
+    <dependency>
+      <groupId>com.github.umjammer</groupId>
+      <artifactId>vavi-commons</artifactId>
+      <version>1.1.20</version>
+    </dependency>
+
     <dependency>
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter-api</artifactId>
@@ -64,13 +120,6 @@
     <dependency>
       <groupId>org.junit.platform</groupId>
       <artifactId>junit-platform-commons</artifactId>
-      <scope>test</scope>
-    </dependency>
-
-    <dependency>
-      <groupId>com.github.umjammer</groupId>
-      <artifactId>vavi-commons</artifactId>
-      <version>1.1.20</version>
       <scope>test</scope>
     </dependency>
   </dependencies>

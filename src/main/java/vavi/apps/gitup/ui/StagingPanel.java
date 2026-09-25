@@ -1,0 +1,133 @@
+/*
+ * Copyright (c) 2026 by Naohide Sano, All rights reserved.
+ *
+ * Programmed by Naohide Sano
+ */
+
+package vavi.apps.gitup.ui;
+
+import java.awt.BorderLayout;
+import java.awt.CardLayout;
+import java.awt.FlowLayout;
+import java.awt.Font;
+import java.awt.event.ActionEvent;
+import java.awt.event.KeyEvent;
+import javax.swing.AbstractAction;
+import javax.swing.BorderFactory;
+import javax.swing.JButton;
+import javax.swing.JComponent;
+import javax.swing.JLabel;
+import javax.swing.JPanel;
+import javax.swing.JScrollPane;
+import javax.swing.JSplitPane;
+import javax.swing.JTextArea;
+import javax.swing.KeyStroke;
+
+import vavi.apps.gitup.model.CommitLog.CommitRow;
+
+
+/**
+ * lower left pane.
+ * <p>
+ * working copy: "Staged files" (top) / "Unstaged files" (bottom) and the commit message box.
+ * a commit: its changed files and its message.
+ *
+ * @author <a href="mailto:umjammer@gmail.com">Naohide Sano</a> (nsano)
+ * @version 0.00 2026-09-25 nsano initial version <br>
+ */
+public class StagingPanel extends JPanel {
+
+    private final CardLayout cards = new CardLayout();
+
+    final FileTable stagedTable = new FileTable(true, true);
+    final FileTable unstagedTable = new FileTable(false, true);
+    final FileTable commitTable = new FileTable(true, false);
+
+    final JTextArea message = new JTextArea(4, 40);
+    final JButton commitButton = new JButton("Commit");
+    final JButton stageAllButton = new JButton("Stage All");
+    final JButton unstageAllButton = new JButton("Unstage All");
+
+    private final JLabel stagedLabel = new JLabel();
+    private final JLabel unstagedLabel = new JLabel();
+    private final JTextArea commitInfo = new JTextArea();
+
+    public StagingPanel() {
+        setLayout(cards);
+
+        // working copy
+        JPanel staged = titled(stagedLabel, unstageAllButton, stagedTable);
+        JPanel unstaged = titled(unstagedLabel, stageAllButton, unstagedTable);
+        JSplitPane lists = new JSplitPane(JSplitPane.VERTICAL_SPLIT, staged, unstaged);
+        lists.setResizeWeight(0.4);
+        lists.setBorder(null);
+
+        message.setLineWrap(true);
+        message.setWrapStyleWord(true);
+        message.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+        message.putClientProperty("JTextField.placeholderText", "Commit message");
+        int menu = Keys.menu();
+        message.getInputMap(JComponent.WHEN_FOCUSED).put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, menu), "commit");
+        message.getActionMap().put("commit", new AbstractAction() {
+            @Override public void actionPerformed(ActionEvent e) { commitButton.doClick(); }
+        });
+        JPanel commitBox = new JPanel(new BorderLayout(4, 4));
+        commitBox.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
+        commitBox.add(new JScrollPane(message), BorderLayout.CENTER);
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
+        commitButton.setToolTipText("Commit staged files (⌘↩)");
+        buttons.add(commitButton);
+        commitBox.add(buttons, BorderLayout.SOUTH);
+
+        JSplitPane working = new JSplitPane(JSplitPane.VERTICAL_SPLIT, lists, commitBox);
+        working.setResizeWeight(1);
+        working.setBorder(null);
+        add(working, "working");
+
+        // a commit
+        commitInfo.setEditable(false);
+        commitInfo.setLineWrap(true);
+        commitInfo.setWrapStyleWord(true);
+        commitInfo.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+        JSplitPane commit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, new JScrollPane(commitInfo), new JScrollPane(commitTable));
+        commit.setResizeWeight(0.3);
+        commit.setBorder(null);
+        add(commit, "commit");
+
+        setCounts(0, 0);
+    }
+
+    private static JPanel titled(JLabel label, JButton button, FileTable table) {
+        JPanel p = new JPanel(new BorderLayout());
+        JPanel header = new JPanel(new BorderLayout());
+        header.setBorder(BorderFactory.createEmptyBorder(2, 6, 2, 4));
+        label.setFont(label.getFont().deriveFont(Font.BOLD));
+        header.add(label, BorderLayout.WEST);
+        button.putClientProperty("JButton.buttonType", "borderless");
+        header.add(button, BorderLayout.EAST);
+        p.add(header, BorderLayout.NORTH);
+        p.add(new JScrollPane(table), BorderLayout.CENTER);
+        return p;
+    }
+
+    public void setCounts(int staged, int unstaged) {
+        stagedLabel.setText("Staged files (" + staged + ")");
+        unstagedLabel.setText("Unstaged files (" + unstaged + ")");
+        stageAllButton.setEnabled(unstaged > 0);
+        unstageAllButton.setEnabled(staged > 0);
+    }
+
+    public void showWorking() {
+        cards.show(this, "working");
+    }
+
+    public void showCommit(CommitRow c) {
+        commitInfo.setText("commit " + c.oid() + "\n"
+                + (c.parents().isEmpty() ? "" : "parents " + String.join(" ", c.parents().stream().map(p -> p.substring(0, 7)).toList()) + "\n")
+                + "author " + c.author() + " <" + c.email() + ">\n"
+                + "date   " + c.time() + "\n\n"
+                + c.message());
+        commitInfo.setCaretPosition(0);
+        cards.show(this, "commit");
+    }
+}
