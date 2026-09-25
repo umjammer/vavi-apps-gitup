@@ -82,7 +82,8 @@
   </dependencyManagement>
 
   <properties>
-    <repo>.</repo>
+    <!-- a repository to open in addition to the restored tabs -->
+    <repo></repo>
   </properties>
 
   <dependencies>

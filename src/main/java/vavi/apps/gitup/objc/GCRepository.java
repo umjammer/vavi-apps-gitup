@@ -49,6 +49,12 @@ public abstract class GCRepository extends NSObject {
 
     public abstract GCBranch lookupUpstreamForLocalBranch_error(GCBranch branch, ObjCObjectByReference error);
 
+    /** @param name "remote/branch" */
+    public abstract GCBranch findRemoteBranchWithName_error(String name, ObjCObjectByReference error);
+
+    /** deletes the branch on the remote (push :branch) and the remote branch reference */
+    public abstract boolean deleteRemoteBranchFromRemote_error(GCBranch remoteBranch, ObjCObjectByReference error);
+
     public abstract NSArray listRemotes(ObjCObjectByReference error);
 
     public abstract GCRemote lookupRemoteWithName_error(String name, ObjCObjectByReference error);

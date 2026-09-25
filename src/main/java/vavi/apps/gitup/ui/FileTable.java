@@ -37,6 +37,7 @@ import javax.swing.table.AbstractTableModel;
 import javax.swing.table.DefaultTableCellRenderer;
 
 import vavi.apps.gitup.model.FileChange;
+import vavi.apps.gitup.ui.icons.IconProvider;
 
 
 /**
@@ -271,6 +272,21 @@ public class FileTable extends JTable {
         public Component getTableCellRendererComponent(JTable t, Object v, boolean sel, boolean focus, int r, int c) {
             JLabel l = (JLabel) super.getTableCellRendererComponent(t, v, sel, false, r, c);
             FileChange.Kind k = (FileChange.Kind) v;
+            l.setToolTipText(k.name().toLowerCase());
+            javax.swing.Icon icon = IconProvider.get().icon(switch (k) {
+                case ADDED -> IconProvider.Key.FILE_ADDED;
+                case MODIFIED -> IconProvider.Key.FILE_MODIFIED;
+                case DELETED -> IconProvider.Key.FILE_DELETED;
+                case RENAMED -> IconProvider.Key.FILE_RENAMED;
+                case TYPECHANGE -> IconProvider.Key.FILE_TYPECHANGE;
+                case UNTRACKED -> IconProvider.Key.FILE_UNTRACKED;
+                case CONFLICTED -> IconProvider.Key.FILE_CONFLICTED;
+            }, 14);
+            l.setIcon(icon);
+            if (icon != null) {
+                l.setText("");
+                return l;
+            }
             l.setText(String.valueOf(k.symbol));
             l.setFont(l.getFont().deriveFont(Font.BOLD));
             if (!sel) {

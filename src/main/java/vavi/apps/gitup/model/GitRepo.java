@@ -286,7 +286,12 @@ public class GitRepo implements AutoCloseable {
 
     /** opens a patch of one file in a commit (against its first parent) */
     public LazyPatch openPatch(String commitOid, FileChange file) {
-        Pointer[] trees = commitTrees(commitOid);
+        return openPatch(commitOid, commitOid, file);
+    }
+
+    /** opens a patch of one file changed from the first parent of oldest to newest */
+    public LazyPatch openPatch(String oldestOid, String newestOid, FileChange file) {
+        Pointer[] trees = rangeTrees(oldestOid, newestOid);
         try {
             GitDiffOptions o = diffOptions(null, false);
             o.pathspec.set(file.oldPath() != null && !file.oldPath().equals(file.path())
@@ -307,8 +312,16 @@ public class GitRepo implements AutoCloseable {
         return new LazyPatch(diff, 0, file);
     }
 
+    /** @return [first parent tree of oldest (nullable), tree of newest] */
+    private Pointer[] rangeTrees(String oldestOid, String newestOid) {
+        if (oldestOid.equals(newestOid)) return commitTrees(newestOid);
+        Pointer[] base = commitTrees(oldestOid);
+        if (base[1] != null) git.git_tree_free(base[1]);
+        return new Pointer[] {base[0], commitTree(newestOid)};
+    }
+
     /** @return [parent tree (nullable), commit tree] */
-    private Pointer[] commitTrees(String commitOid) {
+    Pointer[] commitTrees(String commitOid) {
         Pointer commit = lookupCommit(commitOid);
         try {
             PointerByReference tp = new PointerByReference();
@@ -323,13 +336,18 @@ public class GitRepo implements AutoCloseable {
         }
     }
 
-    private static void freeTrees(Pointer[] trees) {
+    static void freeTrees(Pointer[] trees) {
         for (Pointer t : trees) if (t != null) git.git_tree_free(t);
     }
 
     /** @return files changed in the commit (against its first parent) */
     public List<FileChange> commitFiles(String commitOid) {
-        Pointer[] trees = commitTrees(commitOid);
+        return rangeFiles(commitOid, commitOid);
+    }
+
+    /** @return files changed from the first parent of oldest to newest (a range of commits, like SourceTree's multi selection) */
+    public List<FileChange> rangeFiles(String oldestOid, String newestOid) {
+        Pointer[] trees = rangeTrees(oldestOid, newestOid);
         PointerByReference dp = new PointerByReference();
         try {
             check(git.git_diff_tree_to_tree(dp, handle(), trees[0], trees[1], diffOptions(null, false)), "diff");
@@ -598,6 +616,136 @@ public class GitRepo implements AutoCloseable {
         check(git.git_repository_set_head(handle(), refname), "set HEAD");
     }
 
+    /** a remote */
+    public record Remote(String name, String url, String pushUrl) {}
+
+    public List<Remote> remotes() {
+        GitStrarray names = new GitStrarray();
+        check(git.git_remote_list(names, handle()), "remotes");
+        names.read();
+        List<Remote> list = new ArrayList<>();
+        try {
+            int n = names.count.intValue();
+            String[] a = n == 0 ? new String[0] : names.strings.getStringArray(0, n, "UTF-8");
+            for (String name : a) {
+                PointerByReference rp = new PointerByReference();
+                if (git.git_remote_lookup(rp, handle(), name) != 0) continue;
+                try {
+                    list.add(new Remote(name, git.git_remote_url(rp.getValue()), git.git_remote_pushurl(rp.getValue())));
+                } finally {
+                    git.git_remote_free(rp.getValue());
+                }
+            }
+        } finally {
+            git.git_strarray_dispose(names);
+        }
+        return list;
+    }
+
+    public void createRemote(String name, String url) {
+        IntByReference valid = new IntByReference();
+        check(git.git_remote_name_is_valid(valid, name), "remote name");
+        if (valid.getValue() == 0) throw new GitException("invalid remote name: " + name);
+        PointerByReference rp = new PointerByReference();
+        check(git.git_remote_create(rp, handle(), name, url), "create remote " + name);
+        git.git_remote_free(rp.getValue());
+    }
+
+    /**
+     * renames and / or changes the URLs of a remote. renaming moves its remote branches and
+     * the upstream settings of local branches.
+     *
+     * @param pushUrl empty or null for none (the fetch URL is used)
+     */
+    public void editRemote(String name, String newName, String url, String pushUrl) {
+        String current = name;
+        if (!name.equals(newName)) {
+            IntByReference valid = new IntByReference();
+            check(git.git_remote_name_is_valid(valid, newName), "remote name");
+            if (valid.getValue() == 0) throw new GitException("invalid remote name: " + newName);
+            GitStrarray problems = new GitStrarray();
+            check(git.git_remote_rename(problems, handle(), name, newName), "rename remote " + name);
+            git.git_strarray_dispose(problems);
+            current = newName;
+        }
+        check(git.git_remote_set_url(handle(), current, url), "set url");
+        boolean clear = pushUrl == null || pushUrl.isBlank();
+        String now = current;
+        boolean hasPushUrl = remotes().stream().anyMatch(r -> r.name().equals(now) && r.pushUrl() != null);
+        if (!clear || hasPushUrl) { // clearing an unset push url is an error in libgit2
+            check(git.git_remote_set_pushurl(handle(), current, clear ? null : pushUrl), "set push url");
+        }
+    }
+
+    /** removes a remote with its remote branches (the repository on the server is not touched) */
+    public void removeRemote(String name) {
+        check(git.git_remote_delete(handle(), name), "remove remote " + name);
+    }
+
+    /** renames a local branch, its upstream setting follows */
+    public void renameBranch(String name, String newName) {
+        IntByReference valid = new IntByReference();
+        check(git.git_branch_name_is_valid(valid, newName), "branch name");
+        if (valid.getValue() == 0) throw new GitException("invalid branch name: " + newName);
+        PointerByReference bp = new PointerByReference();
+        check(git.git_branch_lookup(bp, handle(), name, GIT_BRANCH_LOCAL), "branch " + name);
+        try {
+            PointerByReference np = new PointerByReference();
+            check(git.git_branch_move(np, bp.getValue(), newName, 0), "rename " + name);
+            git.git_reference_free(np.getValue());
+        } finally {
+            git.git_reference_free(bp.getValue());
+        }
+    }
+
+    /** @return true when HEAD contains the tip of the local branch */
+    public boolean isMergedIntoHead(String branch) {
+        if (isHeadUnborn()) return false;
+        String tip = revparse("refs/heads/" + branch);
+        String head = headOid();
+        if (tip.equals(head)) return true;
+        GitOid h = new GitOid(), t = new GitOid();
+        git.git_oid_fromstr(h, head);
+        git.git_oid_fromstr(t, tip);
+        return git.git_graph_descendant_of(handle(), h, t) == 1;
+    }
+
+    /**
+     * deletes a local branch.
+     *
+     * @param force delete even when HEAD does not contain it (its commits may be lost)
+     */
+    public void deleteBranch(String name, boolean force) {
+        PointerByReference bp = new PointerByReference();
+        check(git.git_branch_lookup(bp, handle(), name, GIT_BRANCH_LOCAL), "branch " + name);
+        try {
+            if (git.git_branch_is_head(bp.getValue()) == 1) throw new GitException("cannot delete the checked out branch " + name);
+            if (!force && !isMergedIntoHead(name)) {
+                throw new GitException(name + " is not merged into HEAD, use force to delete it anyway");
+            }
+            check(git.git_branch_delete(bp.getValue()), "delete " + name);
+        } finally {
+            git.git_reference_free(bp.getValue());
+        }
+    }
+
+    /**
+     * moves the current branch (or detached HEAD) to the commit.
+     *
+     * @param type {@link LibGit2#GIT_RESET_SOFT} keeps index and working copy,
+     *             {@link LibGit2#GIT_RESET_MIXED} resets the index, keeps the working copy,
+     *             {@link LibGit2#GIT_RESET_HARD} resets both (local changes are lost)
+     */
+    public void reset(String commitOid, int type) {
+        PointerByReference op = new PointerByReference();
+        check(git.git_revparse_single(op, handle(), commitOid), "commit " + commitOid);
+        try {
+            check(git.git_reset(handle(), op.getValue(), type, null), "reset");
+        } finally {
+            git.git_object_free(op.getValue());
+        }
+    }
+
     /** creates a local branch at the commit, optionally checks it out */
     public void createBranch(String name, String commitOid, boolean checkout) {
         Pointer commit = lookupCommit(commitOid);
@@ -811,6 +959,82 @@ public class GitRepo implements AutoCloseable {
             git.git_reference_free(np.getValue());
         } finally {
             git.git_reference_free(rp.getValue());
+        }
+    }
+
+    // undo
+
+    /** what a restore resets besides the references */
+    public enum Restore {
+        /** references only (undo commit: the changes come back staged) */
+        REFS,
+        /** references and the index (the changes come back unstaged) */
+        INDEX,
+        /** references, index and working directory (needs a clean working copy) */
+        ALL
+    }
+
+    /**
+     * where HEAD and the local branches pointed before an operation.
+     *
+     * @param head "refs/heads/..." or a commit id when detached, null when unborn
+     */
+    public record RefSnapshot(String label, String head, Map<String, String> branches, Restore restore) {
+        public boolean soft() { return restore != Restore.ALL; }
+    }
+
+    /** @param soft true for {@link Restore#REFS}, false for {@link Restore#ALL} */
+    public RefSnapshot snapshotRefs(String label, boolean soft) {
+        return snapshotRefs(label, soft ? Restore.REFS : Restore.ALL);
+    }
+
+    public RefSnapshot snapshotRefs(String label, Restore restore) {
+        Map<String, String> branches = new java.util.LinkedHashMap<>();
+        for (Ref r : refs()) {
+            if (r.kind() == Ref.Kind.LOCAL && r.target() != null) branches.put(r.name(), r.target());
+        }
+        String head = null;
+        if (!isHeadUnborn()) {
+            String b = headBranch();
+            head = b != null && !"HEAD".equals(b) ? "refs/heads/" + b : revparse("HEAD");
+        }
+        return new RefSnapshot(label, head, branches, restore);
+    }
+
+    /**
+     * puts HEAD and the local branches back (branches created later are kept).
+     * a hard restore needs a clean working copy.
+     */
+    public void restore(RefSnapshot s) {
+        if (state() != State.NONE) throw new GitException("finish or abort the merge / rebase in progress first");
+        if (!s.soft()) {
+            Status st = status();
+            if (!st.staged().isEmpty() || st.unstaged().stream().anyMatch(f -> f.kind() != FileChange.Kind.UNTRACKED)) {
+                throw new GitException("commit or stash the local changes before undoing");
+            }
+        }
+        for (Map.Entry<String, String> e : s.branches().entrySet()) {
+            GitOid id = new GitOid();
+            git.git_oid_fromstr(id, e.getValue());
+            PointerByReference rp = new PointerByReference();
+            check(git.git_reference_create(rp, handle(), e.getKey(), id, 1, "undo: " + s.label()), "restore " + e.getKey());
+            git.git_reference_free(rp.getValue());
+        }
+        if (s.head() != null) {
+            if (s.head().startsWith("refs/")) {
+                check(git.git_repository_set_head(handle(), s.head()), "set HEAD");
+            } else {
+                GitOid id = new GitOid();
+                git.git_oid_fromstr(id, s.head());
+                check(git.git_repository_set_head_detached(handle(), id), "set HEAD");
+            }
+        }
+        switch (s.restore()) {
+            case ALL -> resetHardToHead();
+            case INDEX -> {
+                if (!isHeadUnborn()) reset(revparse("HEAD"), GIT_RESET_MIXED);
+            }
+            case REFS -> {}
         }
     }
 

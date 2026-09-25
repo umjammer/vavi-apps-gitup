@@ -30,6 +30,7 @@ import vavi.apps.gitup.model.MessageHistory;
 import vavi.apps.gitup.ui.MainWindow;
 import vavi.apps.gitup.ui.RepositoryBrowser;
 import vavi.apps.gitup.ui.WindowState;
+import vavi.apps.gitup.ui.icons.IconProvider;
 
 
 /**
@@ -80,26 +81,33 @@ public class Main implements MainWindow.App {
         }
         // loads GitUpKit on the main thread now, before any window
         LibGit2.INSTANCE.hashCode();
+        // SourceTree's asset icons come through AppKit's main thread, which must not be waited for on the EDT
+        IconProvider.get().preload();
 
         List<Path> paths = new ArrayList<>();
-        for (String a : args) paths.add(Path.of(a).toAbsolutePath().normalize());
+        for (String a : args) {
+            if (!a.isBlank()) paths.add(Path.of(a).toAbsolutePath().normalize());
+        }
         SwingUtilities.invokeLater(() -> new Main().start(paths));
     }
 
-    private void start(List<Path> paths) {
-        int selected = 0;
-        if (paths.isEmpty()) {
-            for (String s : prefs.get(OPEN_TABS, "").split("\n")) {
-                if (!s.isBlank() && Files.isDirectory(Path.of(s))) paths.add(Path.of(s));
-            }
-            selected = prefs.getInt(SELECTED_TAB, 0);
+    /** restores the tabs of the last session, then opens the given repositories (selecting the last one) */
+    private void start(List<Path> args) {
+        List<Path> restored = new ArrayList<>();
+        for (String s : prefs.get(OPEN_TABS, "").split("\n")) {
+            if (!s.isBlank() && Files.isDirectory(Path.of(s))) restored.add(Path.of(s));
         }
-        if (paths.isEmpty()) {
+        int selected = prefs.getInt(SELECTED_TAB, 0);
+        if (restored.isEmpty() && args.isEmpty()) {
             showBrowser();
             return;
         }
-        paths.forEach(this::open);
-        window.select(selected);
+        restored.forEach(this::open);
+        if (args.isEmpty()) {
+            window.select(selected);
+        } else {
+            args.forEach(this::open); // an already open one is selected
+        }
         if (WindowState.getFlag(BROWSER_VISIBLE, false)) showBrowser();
     }
 
@@ -152,6 +160,11 @@ public class Main implements MainWindow.App {
     public void tabsChanged(List<Path> paths, int selected) {
         prefs.put(OPEN_TABS, String.join("\n", paths.stream().map(Path::toString).toList()));
         prefs.putInt(SELECTED_TAB, Math.max(selected, 0));
+        try {
+            prefs.flush(); // a quit (⌘Q) exits without closing the window
+        } catch (java.util.prefs.BackingStoreException e) {
+            System.getLogger(Main.class.getName()).log(System.Logger.Level.WARNING, e.getMessage(), e);
+        }
     }
 
     @Override

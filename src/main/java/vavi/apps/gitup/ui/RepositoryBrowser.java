@@ -53,6 +53,7 @@ import vavi.apps.gitup.model.Bookmarks.Entry;
 import vavi.apps.gitup.model.Bookmarks.Group;
 import vavi.apps.gitup.model.Bookmarks.Repo;
 import vavi.apps.gitup.model.SourceTreeImport;
+import vavi.apps.gitup.ui.icons.IconProvider;
 
 
 /**
@@ -88,6 +89,10 @@ public class RepositoryBrowser extends JFrame {
         tree.setRowHeight(0); // variable, repositories show two lines
         tree.setCellRenderer(new Renderer());
         ToolTipManager.sharedInstance().registerComponent(tree);
+        tree.addTreeExpansionListener(new javax.swing.event.TreeExpansionListener() {
+            @Override public void treeExpanded(javax.swing.event.TreeExpansionEvent e) { expansionChanged(e.getPath(), true); }
+            @Override public void treeCollapsed(javax.swing.event.TreeExpansionEvent e) { expansionChanged(e.getPath(), false); }
+        });
         tree.setDragEnabled(true);
         tree.setDropMode(DropMode.ON_OR_INSERT);
         tree.setTransferHandler(new Handler());
@@ -166,10 +171,57 @@ public class RepositoryBrowser extends JFrame {
 
     private void rebuild() {
         String q = search.getText().strip().toLowerCase();
-        rootNode.removeAllChildren();
-        add(rootNode, bookmarks.root(), q);
-        model.reload();
-        expandAll();
+        rebuilding = true;
+        try {
+            rootNode.removeAllChildren();
+            add(rootNode, bookmarks.root(), q);
+            model.reload();
+            restoreExpansion(q.isEmpty());
+        } finally {
+            rebuilding = false;
+        }
+    }
+
+    /**
+     * rebuilds after the current event. a drop must not rebuild the model synchronously:
+     * Swing clears the drop location afterwards and FlatTreeUI then asks the bounds of a
+     * path that no longer exists (NPE in BasicTreeUI.getDropLineRect).
+     */
+    private void rebuildLater() {
+        javax.swing.SwingUtilities.invokeLater(this::rebuild);
+    }
+
+    /** groups the user collapsed, as "/"-joined group names */
+    private final java.util.Set<String> collapsed = new java.util.HashSet<>(
+            java.util.Arrays.stream(WindowState.getString(COLLAPSED, "").split("\n")).filter(x -> !x.isEmpty()).toList());
+    private static final String COLLAPSED = "browser.collapsed";
+    private boolean rebuilding;
+
+    /** expands groups top-down except the saved collapsed ones (all while searching) */
+    private void restoreExpansion(boolean useSaved) {
+        for (int i = 0; i < tree.getRowCount(); i++) {
+            TreePath p = tree.getPathForRow(i);
+            if (((DefaultMutableTreeNode) p.getLastPathComponent()).getUserObject() instanceof Group
+                    && !(useSaved && collapsed.contains(groupKey(p)))) {
+                tree.expandRow(i);
+            }
+        }
+    }
+
+    private static String groupKey(TreePath p) {
+        StringBuilder sb = new StringBuilder();
+        for (Object o : p.getPath()) {
+            if (((DefaultMutableTreeNode) o).getUserObject() instanceof Group g) sb.append('/').append(g.name());
+        }
+        return sb.toString();
+    }
+
+    private void expansionChanged(TreePath p, boolean expanded) {
+        if (rebuilding || !search.getText().isBlank()) return;
+        if (!(((DefaultMutableTreeNode) p.getLastPathComponent()).getUserObject() instanceof Group)) return;
+        if (expanded) collapsed.remove(groupKey(p));
+        else collapsed.add(groupKey(p));
+        WindowState.putString(COLLAPSED, String.join("\n", collapsed));
     }
 
     /** @return true when something below matched */
@@ -195,10 +247,6 @@ public class RepositoryBrowser extends JFrame {
             }
         }
         return any;
-    }
-
-    private void expandAll() {
-        for (int i = 0; i < tree.getRowCount(); i++) tree.expandRow(i);
     }
 
     private Entry selectedEntry() {
@@ -288,9 +336,10 @@ public class RepositoryBrowser extends JFrame {
             added++;
         }
         save();
-        rebuild();
+        rebuildLater(); // may be called from a drop
         if (!notRepos.isEmpty()) {
-            JOptionPane.showMessageDialog(this, "Not a git working directory:\n" + String.join("\n", notRepos), "Add", JOptionPane.WARNING_MESSAGE);
+            javax.swing.SwingUtilities.invokeLater(() -> JOptionPane.showMessageDialog(this,
+                    "Not a git working directory:\n" + String.join("\n", notRepos), "Add", JOptionPane.WARNING_MESSAGE));
         }
         return added;
     }
@@ -379,12 +428,14 @@ public class RepositoryBrowser extends JFrame {
             Object o = ((DefaultMutableTreeNode) v).getUserObject();
             setIcon(null);
             if (o instanceof Repo r) {
+                setIcon(IconProvider.get().icon(IconProvider.Key.REPOSITORY, 16));
                 boolean exists = Files.isDirectory(r.path());
                 String branch = exists ? branchOf(r.path()) : null;
                 setText("<html><b>" + esc(r.name()) + "</b>" + (branch != null ? " <font color='#0969da'>" + esc(branch) + "</font>" : "")
                         + "<br><font color='gray' size='-2'>" + esc(r.path().toString()) + (exists ? "" : " (missing)") + "</font></html>");
                 setToolTipText(r.path().toString());
             } else if (o instanceof Group g) {
+                setIcon(IconProvider.get().icon(IconProvider.Key.FOLDER, 16));
                 setText(g.name());
                 setFont(t.getFont().deriveFont(java.awt.Font.BOLD));
                 setToolTipText(null);
@@ -498,6 +549,6 @@ public class RepositoryBrowser extends JFrame {
         if (index < 0 || index > target.children().size()) target.children().add(entry);
         else target.children().add(index, entry);
         save();
-        rebuild();
+        rebuildLater();
     }
 }

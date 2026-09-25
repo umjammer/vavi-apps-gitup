@@ -88,6 +88,15 @@ class RemoteOpsTest {
             assertEquals(GitRepo.PullResult.FAST_FORWARD, repo.pullFromUpstream());
         }
         assertEquals("2\n", Files.readString(b.resolve("f.txt")));
+
+        // delete a branch on the remote
+        sh(a, "push", "-q", "origin", "main:topic");
+        sh(a, "fetch", "-q");
+        try (RemoteOps ops = new RemoteOps(a, NO_PROMPT, System.err::println)) {
+            ops.deleteRemoteBranch("origin/topic");
+        }
+        assertEquals("", sh(bare, "branch", "--list", "topic").strip());
+        assertEquals("", sh(a, "branch", "-r", "--list", "origin/topic").strip(), "the remote branch reference too");
         assertEquals(sh(a, "rev-parse", "HEAD"), sh(b, "rev-parse", "HEAD"));
         assertEquals("", sh(b, "status", "--porcelain"));
     }

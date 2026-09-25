@@ -155,7 +155,28 @@ public interface LibGit2 extends Library {
     int git_branch_upstream(PointerByReference out, Pointer branch);
     int git_branch_create(PointerByReference out, Pointer repo, String name, Pointer target, int force);
     int git_branch_set_upstream(Pointer branch, String branchName);
+    int git_branch_delete(Pointer branch);
+    int git_branch_move(PointerByReference out, Pointer branch, String newName, int force);
+    int git_branch_is_head(Pointer branch);
+    int git_branch_name_is_valid(IntByReference valid, String name);
+
+    // remotes
+
+    int git_remote_list(GitStrarray out, Pointer repo);
+    int git_remote_lookup(PointerByReference out, Pointer repo, String name);
+    String git_remote_url(Pointer remote);
+    String git_remote_pushurl(Pointer remote);
+    void git_remote_free(Pointer remote);
+    int git_remote_create(PointerByReference out, Pointer repo, String name, String url);
+    int git_remote_set_url(Pointer repo, String remote, String url);
+    int git_remote_set_pushurl(Pointer repo, String remote, String url);
+    int git_remote_rename(GitStrarray problems, Pointer repo, String name, String newName);
+    int git_remote_delete(Pointer repo, String name);
+    int git_remote_name_is_valid(IntByReference valid, String name);
+    void git_strarray_dispose(GitStrarray array);
     int git_reference_set_target(PointerByReference out, Pointer ref, GitOid id, String logMessage);
+    int git_reference_create(PointerByReference out, Pointer repo, String name, GitOid id, int force, String logMessage);
+    int git_repository_set_head_detached(Pointer repo, GitOid commitish);
 
     int git_graph_descendant_of(Pointer repo, GitOid commit, GitOid ancestor);
 

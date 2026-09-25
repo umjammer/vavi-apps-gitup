@@ -111,6 +111,19 @@ public class RemoteOps implements AutoCloseable {
         }
     }
 
+    /** deletes a branch on its remote, e.g. "origin/topic" */
+    public void deleteRemoteBranch(String remoteBranch) {
+        NSAutoreleasePool pool = NSAutoreleasePool.new_();
+        try {
+            ObjCObjectByReference e = new ObjCObjectByReference();
+            GCBranch branch = repo.findRemoteBranchWithName_error(remoteBranch, e);
+            if (branch == null) throw error("remote branch " + remoteBranch, e);
+            if (!repo.deleteRemoteBranchFromRemote_error(branch, e)) throw error("delete " + remoteBranch, e);
+        } finally {
+            pool.drain();
+        }
+    }
+
     @Override
     public void close() {
         repo.setDelegate(null); // the rococoa wrapper releases repo when collected

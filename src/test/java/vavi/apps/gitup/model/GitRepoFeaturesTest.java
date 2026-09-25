@@ -260,6 +260,171 @@ class GitRepoFeaturesTest {
         }
     }
 
+    /** a multiple selection shows the changes of the whole range */
+    @Test
+    void rangeFiles() throws Exception {
+        Path b = setupClone();
+        commitInB(b, 1, "ONE");
+        Files.writeString(b.resolve("g.txt"), "g\n");
+        sh(b, "add", "g.txt");
+        sh(b, "commit", "-q", "-m", "add g");
+        commitInB(b, 5, "FIVE");
+        try (GitRepo repo = new GitRepo(b)) {
+            String newest = repo.revparse("HEAD");
+            String oldest = repo.revparse("HEAD~2");
+            List<FileChange> files = repo.rangeFiles(oldest, newest);
+            assertEquals(List.of("f.txt", "g.txt"), files.stream().map(FileChange::path).sorted().toList());
+            FileChange f = files.stream().filter(x -> x.path().equals("f.txt")).findFirst().orElseThrow();
+            try (LazyPatch p = repo.openPatch(oldest, newest, f)) {
+                long changes = java.util.stream.IntStream.range(0, p.rowCount()).mapToObj(p::row).filter(LazyPatch.Row::isChange).count();
+                assertEquals(4, changes, "line 1 and line 5 replaced, from before the oldest to the newest");
+            }
+            assertEquals(List.of("f.txt"), repo.rangeFiles(newest, newest).stream().map(FileChange::path).toList());
+        }
+    }
+
+    @Test
+    void undoCommitIsSoft() throws Exception {
+        Path b = setupClone();
+        String before = sh(b, "rev-parse", "HEAD").strip();
+        Files.writeString(b.resolve("g.txt"), "g\n");
+        try (GitRepo repo = new GitRepo(b)) {
+            repo.stage(repo.status().unstaged());
+            GitRepo.RefSnapshot s = repo.snapshotRefs("Commit", true);
+            repo.commit("g\n");
+            assertFalse(before.equals(repo.headOid()));
+            repo.restore(s);
+            assertEquals(before, repo.headOid());
+        }
+        assertEquals("A  g.txt\n", sh(b, "status", "--porcelain"), "the committed changes are staged again");
+        assertEquals("main", sh(b, "rev-parse", "--abbrev-ref", "HEAD").strip());
+    }
+
+    @Test
+    void undoRewriteIsHard() throws Exception {
+        Path b = setupClone();
+        commitInB(b, 2, "two");
+        commitInB(b, 4, "four");
+        String before = sh(b, "rev-parse", "HEAD").strip();
+        try (GitRepo repo = new GitRepo(b)) {
+            GitRepo.RefSnapshot s = repo.snapshotRefs("Delete Commit", false);
+            vavi.apps.gitup.objc.HistoryOps.delete(b, repo.revparse("HEAD~1"));
+            repo.resetHardToHead();
+            assertEquals("1\n2\n3\nfour\n5\n", Files.readString(b.resolve("f.txt")));
+
+            Files.writeString(b.resolve("f.txt"), "dirty\n");
+            assertThrows(GitException.class, () -> repo.restore(s), "needs a clean working copy");
+            repo.discard(repo.status().unstaged());
+
+            repo.restore(s);
+            assertEquals(before, repo.headOid());
+        }
+        assertEquals("1\ntwo\n3\nfour\n5\n", Files.readString(b.resolve("f.txt")));
+        assertEquals("", sh(b, "status", "--porcelain"));
+    }
+
+    @Test
+    void remotes() throws Exception {
+        Path b = setupClone();
+        try (GitRepo repo = new GitRepo(b)) {
+            assertEquals(List.of("origin"), repo.remotes().stream().map(GitRepo.Remote::name).toList());
+            repo.createRemote("upstream", "https://example.com/u.git");
+            assertThrows(GitException.class, () -> repo.createRemote("bad name", "x"));
+            repo.editRemote("upstream", "mirror", "https://example.com/m.git", "git@example.com:m.git");
+            GitRepo.Remote m = repo.remotes().stream().filter(r -> r.name().equals("mirror")).findFirst().orElseThrow();
+            assertEquals("https://example.com/m.git", m.url());
+            assertEquals("git@example.com:m.git", m.pushUrl());
+            repo.editRemote("mirror", "mirror", "https://example.com/m2.git", "");
+            assertNull(repo.remotes().stream().filter(r -> r.name().equals("mirror")).findFirst().orElseThrow().pushUrl());
+
+            // renaming origin moves its remote branches and main's upstream
+            repo.editRemote("origin", "home", repo.remotes().getFirst().url(), null);
+            assertEquals("home/main", repo.upstream("main"));
+            repo.removeRemote("mirror");
+            assertEquals(List.of("home"), repo.remotes().stream().map(GitRepo.Remote::name).toList());
+        }
+        assertEquals("home\n", sh(b, "remote"));
+    }
+
+    @Test
+    void renameAndDeleteBranch() throws Exception {
+        Path b = setupClone();
+        sh(b, "branch", "topic");
+        sh(b, "checkout", "-q", "-b", "wip");
+        commitInB(b, 2, "unmerged");
+        sh(b, "checkout", "-q", "main");
+        try (GitRepo repo = new GitRepo(b)) {
+            repo.renameBranch("topic", "feature/x");
+            assertThrows(GitException.class, () -> repo.renameBranch("feature/x", "bad..name"));
+            assertTrue(repo.isMergedIntoHead("feature/x"));
+            repo.deleteBranch("feature/x", false);
+
+            assertFalse(repo.isMergedIntoHead("wip"));
+            GitException e = assertThrows(GitException.class, () -> repo.deleteBranch("wip", false));
+            assertTrue(e.getMessage().contains("not merged"), e.getMessage());
+            repo.deleteBranch("wip", true);
+            assertThrows(GitException.class, () -> repo.deleteBranch("main", true), "the checked out branch");
+        }
+        assertEquals("* main", sh(b, "branch").strip());
+    }
+
+    @Test
+    void resetModes() throws Exception {
+        Path b = setupClone();
+        commitInB(b, 2, "two");
+        String first = sh(b, "rev-parse", "HEAD~1").strip();
+        try (GitRepo repo = new GitRepo(b)) {
+            repo.reset(first, vavi.apps.gitup.jna.LibGit2.GIT_RESET_SOFT);
+            assertEquals(first, repo.headOid());
+            assertEquals("M  f.txt\n", sh(b, "status", "--porcelain"), "soft: the change is staged");
+            sh(b, "commit", "-q", "-m", "again");
+
+            repo.reset(first, vavi.apps.gitup.jna.LibGit2.GIT_RESET_MIXED);
+            assertEquals(" M f.txt\n", sh(b, "status", "--porcelain"), "mixed: the change is unstaged");
+            sh(b, "commit", "-q", "-am", "again");
+
+            repo.reset(first, vavi.apps.gitup.jna.LibGit2.GIT_RESET_HARD);
+            assertEquals("", sh(b, "status", "--porcelain"), "hard: the change is gone");
+            assertEquals("1\n2\n3\n4\n5\n", Files.readString(b.resolve("f.txt")));
+        }
+    }
+
+    /** undo of a mixed reset restores the index too, redo goes forward again */
+    @Test
+    void undoRedoMixedReset() throws Exception {
+        Path b = setupClone();
+        commitInB(b, 2, "two");
+        String second = sh(b, "rev-parse", "HEAD").strip();
+        String first = sh(b, "rev-parse", "HEAD~1").strip();
+        try (GitRepo repo = new GitRepo(b)) {
+            GitRepo.RefSnapshot before = repo.snapshotRefs("Reset", GitRepo.Restore.INDEX);
+            repo.reset(first, vavi.apps.gitup.jna.LibGit2.GIT_RESET_MIXED);
+            assertEquals(" M f.txt\n", sh(b, "status", "--porcelain"));
+
+            GitRepo.RefSnapshot forward = repo.snapshotRefs("Reset", GitRepo.Restore.INDEX); // what the UI keeps for redo
+            repo.restore(before);
+            assertEquals(second, repo.headOid());
+            assertEquals("", sh(b, "status", "--porcelain"), "index back to the restored HEAD");
+
+            repo.restore(forward);
+            assertEquals(first, repo.headOid());
+            assertEquals(" M f.txt\n", sh(b, "status", "--porcelain"));
+        }
+    }
+
+    /** undo of a branch deletion brings the branch back */
+    @Test
+    void undoDeleteBranch() throws Exception {
+        Path b = setupClone();
+        sh(b, "branch", "topic");
+        try (GitRepo repo = new GitRepo(b)) {
+            GitRepo.RefSnapshot s = repo.snapshotRefs("Delete Branch", GitRepo.Restore.REFS);
+            repo.deleteBranch("topic", false);
+            repo.restore(s);
+            assertTrue(repo.refs().stream().anyMatch(r -> r.shorthand().equals("topic")));
+        }
+    }
+
     @Test
     void pullUpToDate() throws Exception {
         Path b = setupClone();

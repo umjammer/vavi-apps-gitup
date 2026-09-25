@@ -61,10 +61,14 @@ public class LogPanel extends JPanel {
         void selected(CommitRow commit);
         void loadMore();
         void createBranch(CommitRow commit);
+        /** several commits selected (newest first), the changes of the whole range are shown */
+        void selectedMany(List<CommitRow> commits);
         /** GitUp's "Edit Message": rewrites the commit and its descendants */
         void editMessage(CommitRow commit);
         /** GitUp's other history rewrites */
         void rewrite(CommitRow commit, Rewrite rewrite);
+        /** SourceTree's "Reset current branch to this commit" */
+        void resetTo(CommitRow commit);
     }
 
     /** GitUp's history rewrites offered in the log */
@@ -97,7 +101,7 @@ public class LogPanel extends JPanel {
     public LogPanel() {
         super(new BorderLayout());
         table.setShowGrid(false);
-        table.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        table.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
         table.setRowHeight(22);
         table.setFillsViewportHeight(true);
         table.getColumnModel().getColumn(0).setCellRenderer(new GraphRenderer());
@@ -119,7 +123,9 @@ public class LogPanel extends JPanel {
             if (e.getValueIsAdjusting() || listener == null) return;
             int r = table.getSelectedRow();
             if (r < 0) return;
-            listener.selected(commitAt(r));
+            List<CommitRow> selected = selectedCommits();
+            if (selected.size() > 1) listener.selectedMany(selected);
+            else listener.selected(commitAt(r));
         });
         table.addMouseListener(new MouseAdapter() {
             @Override public void mousePressed(MouseEvent e) { if (e.isPopupTrigger()) popup(e); }
@@ -221,30 +227,51 @@ public class LogPanel extends JPanel {
     private void popup(MouseEvent e) {
         int r = table.rowAtPoint(e.getPoint());
         if (r < 0) return;
-        table.setRowSelectionInterval(r, r);
-        CommitRow c = commitAt(r);
-        if (c == null) return;
+        if (!table.isRowSelected(r)) table.setRowSelectionInterval(r, r);
+        List<CommitRow> selected = selectedCommits();
+        if (selected.isEmpty()) return;
         JPopupMenu menu = new JPopupMenu();
-        item(menu, "Copy SHA", () -> copy(c.oid()));
-        item(menu, "Copy Short SHA", () -> copy(c.shortOid()));
-        item(menu, "Copy Summary", () -> copy(c.summary()));
-        item(menu, "Copy Message", () -> copy(c.message()));
-        item(menu, "Copy Author", () -> copy(c.author() + " <" + c.email() + ">"));
-        item(menu, "Copy Row", () -> copy(String.join("\t", c.shortOid(), c.summary(), DATE.format(c.time()), c.author())));
-        menu.addSeparator();
-        item(menu, "Edit Message…", () -> { if (listener != null) listener.editMessage(c); });
-        javax.swing.JMenu rewrite = new javax.swing.JMenu("Rewrite");
-        boolean single = c.parents().size() == 1;
-        rewriteItem(rewrite, "Squash Into Parent…", c, Rewrite.SQUASH, single);
-        rewriteItem(rewrite, "Fixup Into Parent", c, Rewrite.FIXUP, single);
-        rewrite.addSeparator();
-        rewriteItem(rewrite, "Move Up (Swap with Child)", c, Rewrite.MOVE_UP, single);
-        rewriteItem(rewrite, "Move Down (Swap with Parent)", c, Rewrite.MOVE_DOWN, single);
-        rewrite.addSeparator();
-        rewriteItem(rewrite, "Delete Commit…", c, Rewrite.DELETE, single);
-        menu.add(rewrite);
-        item(menu, "New Branch Here…", () -> { if (listener != null) listener.createBranch(c); });
+        if (selected.size() == 1) {
+            CommitRow c = selected.getFirst();
+            boolean single = c.parents().size() == 1;
+            // GitUp's history rewriting
+            item(menu, "Edit Message…", () -> { if (listener != null) listener.editMessage(c); });
+            rewriteItem(menu, "Squash Into Parent…", c, Rewrite.SQUASH, single);
+            rewriteItem(menu, "Fixup Into Parent", c, Rewrite.FIXUP, single);
+            rewriteItem(menu, "Move Up (Swap with Child)", c, Rewrite.MOVE_UP, single);
+            rewriteItem(menu, "Move Down (Swap with Parent)", c, Rewrite.MOVE_DOWN, single);
+            rewriteItem(menu, "Delete Commit…", c, Rewrite.DELETE, single);
+            menu.addSeparator();
+            item(menu, "New Branch Here…", () -> { if (listener != null) listener.createBranch(c); });
+            item(menu, "Reset " + (headBranch != null ? headBranch : "HEAD") + " to This Commit…", () -> { if (listener != null) listener.resetTo(c); });
+            menu.addSeparator();
+        }
+        javax.swing.JMenu copy = new javax.swing.JMenu("Copy");
+        copyItem(copy, "SHA", selected, CommitRow::oid);
+        copyItem(copy, "Short SHA", selected, CommitRow::shortOid);
+        copyItem(copy, "Summary", selected, CommitRow::summary);
+        copyItem(copy, "Message", selected, c -> c.message().strip());
+        copyItem(copy, "Author", selected, c -> c.author() + " <" + c.email() + ">");
+        copyItem(copy, "Row", selected, c -> String.join("\t", c.shortOid(), c.summary(), c.author() + " <" + c.email() + ">", DATE.format(c.time())));
+        menu.add(copy);
         menu.show(table, e.getX(), e.getY());
+    }
+
+    /** copies the value of every selected commit, one per line (messages separated by a blank line) */
+    private static void copyItem(javax.swing.JMenu menu, String label, List<CommitRow> rows, java.util.function.Function<CommitRow, String> f) {
+        JMenuItem i = new JMenuItem(label);
+        i.addActionListener(e -> copy(rows.stream().map(f).collect(Collectors.joining(label.equals("Message") ? "\n\n" : "\n"))));
+        menu.add(i);
+    }
+
+    /** @return selected commits in table order (newest first), without the uncommitted row */
+    public List<CommitRow> selectedCommits() {
+        List<CommitRow> list = new ArrayList<>();
+        for (int r : table.getSelectedRows()) {
+            CommitRow c = commitAt(r);
+            if (c != null) list.add(c);
+        }
+        return list;
     }
 
     private static void item(JPopupMenu menu, String label, Runnable r) {
@@ -253,7 +280,7 @@ public class LogPanel extends JPanel {
         menu.add(i);
     }
 
-    private void rewriteItem(javax.swing.JMenu menu, String label, CommitRow c, Rewrite r, boolean enabled) {
+    private void rewriteItem(JPopupMenu menu, String label, CommitRow c, Rewrite r, boolean enabled) {
         JMenuItem i = new JMenuItem(label);
         i.setEnabled(enabled);
         i.addActionListener(e -> { if (listener != null) listener.rewrite(c, r); });

@@ -48,6 +48,8 @@ import vavi.apps.gitup.model.CommitLog.CommitRow;
 import vavi.apps.gitup.model.FileChange;
 import vavi.apps.gitup.model.GitRepo;
 import vavi.apps.gitup.model.GitRepo.IgnoreTarget;
+import vavi.apps.gitup.model.HistorySearch;
+import vavi.apps.gitup.model.HistorySearch.Hit;
 import vavi.apps.gitup.model.GitRepo.PullResult;
 import vavi.apps.gitup.model.GitRepo.Ref;
 import vavi.apps.gitup.model.GitRepo.Stash;
@@ -56,6 +58,7 @@ import vavi.apps.gitup.model.LazyPatch;
 import vavi.apps.gitup.model.MessageHistory;
 import vavi.apps.gitup.objc.HistoryOps;
 import vavi.apps.gitup.objc.RemoteOps;
+import vavi.apps.gitup.ui.icons.IconProvider;
 
 import static java.lang.System.getLogger;
 
@@ -100,6 +103,8 @@ public class RepoPanel extends JPanel {
     private final StagingPanel staging = new StagingPanel();
     private final DiffView diff = new DiffView();
     private final JLabel statusBar = new JLabel(" ");
+    private final JTextField searchField = new JTextField(20);
+    private final SearchPanel searchPanel = new SearchPanel();
     private final List<Action> remoteActions = new ArrayList<>();
 
     // git thread only
@@ -118,6 +123,10 @@ public class RepoPanel extends JPanel {
     /** true while the working copy (not a commit) is shown */
     private boolean showingWorking = true;
     private String selectedCommit;
+    /** remotes of the last refresh */
+    private List<GitRepo.Remote> remotes = List.of();
+    /** the oldest commit of a multiple selection shown in the lower panes, equals selectedCommit for one */
+    private String rangeOldest;
     /** the working copy file whose diff is shown */
     private FileChange currentFile;
     private boolean adjusting;
@@ -197,7 +206,11 @@ public class RepoPanel extends JPanel {
         JSplitPane bottom = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, staging, diffScroll);
         bottom.setResizeWeight(0.3);
         bottom.setDividerLocation(420);
-        JSplitPane center = new JSplitPane(JSplitPane.VERTICAL_SPLIT, logPanel, bottom);
+        JPanel logArea = new JPanel(new BorderLayout());
+        logArea.add(logPanel, BorderLayout.CENTER);
+        searchPanel.setVisible(false);
+        logArea.add(searchPanel, BorderLayout.SOUTH);
+        JSplitPane center = new JSplitPane(JSplitPane.VERTICAL_SPLIT, logArea, bottom);
         center.setResizeWeight(0.4);
         center.setDividerLocation(330);
         JSplitPane main = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, sidebar, center);
@@ -216,8 +229,10 @@ public class RepoPanel extends JPanel {
             @Override public void selected(CommitRow commit) { commitSelected(commit); }
             @Override public void loadMore() { RepoPanel.this.loadMore(); }
             @Override public void createBranch(CommitRow commit) { newBranch(commit.oid()); }
+            @Override public void selectedMany(List<CommitRow> commits) { commitsSelected(commits); }
             @Override public void editMessage(CommitRow commit) { RepoPanel.this.editMessage(commit); }
             @Override public void rewrite(CommitRow commit, LogPanel.Rewrite rewrite) { RepoPanel.this.rewrite(commit, rewrite); }
+            @Override public void resetTo(CommitRow commit) { RepoPanel.this.resetTo(commit); }
         });
         sidebar.setListener(new SidebarPanel.Listener() {
             @Override public void checkout(Ref ref) { RepoPanel.this.checkout(ref); }
@@ -225,6 +240,13 @@ public class RepoPanel extends JPanel {
             @Override public void stashApply(Stash stash, boolean drop) { RepoPanel.this.stashApply(stash, drop); }
             @Override public void stashDrop(Stash stash) { RepoPanel.this.stashDrop(stash); }
             @Override public void showStash(Stash stash) { RepoPanel.this.showStash(stash); }
+            @Override public void newBranch() { RepoPanel.this.newBranch(null); }
+            @Override public void renameBranch(Ref branch) { RepoPanel.this.renameBranch(branch); }
+            @Override public void deleteBranch(Ref branch) { RepoPanel.this.deleteBranches(branch); }
+            @Override public void deleteRemoteBranch(Ref branch) { RepoPanel.this.deleteRemoteBranch(branch); }
+            @Override public void newRemote() { editRemote(null); }
+            @Override public void editRemote(GitRepo.Remote remote) { RepoPanel.this.editRemote(remote); }
+            @Override public void removeRemote(GitRepo.Remote remote) { RepoPanel.this.removeRemote(remote); }
         });
         FileTable.Listener files = new FileTable.Listener() {
             @Override public void move(FileTable source, List<FileChange> list) {
@@ -255,7 +277,7 @@ public class RepoPanel extends JPanel {
         staging.commitTable.getSelectionModel().addListSelectionListener(e -> {
             if (e.getValueIsAdjusting() || adjusting) return;
             List<FileChange> sel = staging.commitTable.selectedFiles();
-            if (sel.size() == 1 && selectedCommit != null) showCommitFile(selectedCommit, sel.getFirst());
+            if (sel.size() == 1 && selectedCommit != null) showCommitFile(rangeOldest, selectedCommit, sel.getFirst());
         });
         staging.commitButton.addActionListener(e -> commit());
         staging.stageAllButton.addActionListener(e -> {
@@ -303,13 +325,26 @@ public class RepoPanel extends JPanel {
     private final Action stashAction = action("Stash", "Stash the working copy changes", KeyStroke.getKeyStroke(KeyEvent.VK_S, menuMask | shift), this::stash);
     private final Action discardAction = action("Discard", "Discard the selected unstaged files", null, () -> discardFiles(staging.unstagedTable.selectedFiles()));
     private final Action abortMergeAction = action("Abort Merge", "Throw away the merge or rebase in progress", null, this::abortMerge);
+    private final Action undoAction = action("Undo", "Put the branches back where they were before the last operation",
+            KeyStroke.getKeyStroke(KeyEvent.VK_Z, menuMask), this::undo);
+    private final Action redoAction = action("Redo", "Redo the last undone operation",
+            KeyStroke.getKeyStroke(KeyEvent.VK_Z, menuMask | shift), this::redo);
+    private final Action findAction = action("Find…", "Search the history", KeyStroke.getKeyStroke(KeyEvent.VK_F, menuMask), () -> {
+        searchField.requestFocusInWindow();
+        searchField.selectAll();
+    });
     private final Action refreshAction = action("Refresh", "Reload the repository", KeyStroke.getKeyStroke(KeyEvent.VK_R, menuMask), () -> refreshAll(true));
 
     /** actions for the window's "Repository" menu, null is a separator */
     public List<Action> repositoryActions() {
-        return java.util.Arrays.asList(refreshAction, null, commitAction, branchAction, stashAction, discardAction, abortMergeAction,
+        return java.util.Arrays.asList(undoAction, redoAction, null, refreshAction, findAction, null, commitAction, branchAction, stashAction, discardAction, abortMergeAction,
                 null, fetchAction, pullAction, pullRebaseAction, pushAction);
     }
+
+    private final Map<Action, IconProvider.Key> toolbarIcons = Map.of(
+            commitAction, IconProvider.Key.COMMIT, pullAction, IconProvider.Key.PULL, pushAction, IconProvider.Key.PUSH,
+            fetchAction, IconProvider.Key.FETCH, branchAction, IconProvider.Key.BRANCH, stashAction, IconProvider.Key.STASH,
+            discardAction, IconProvider.Key.DISCARD, refreshAction, IconProvider.Key.REFRESH);
 
     private JToolBar buildToolBar() {
         JToolBar bar = new JToolBar();
@@ -322,8 +357,26 @@ public class RepoPanel extends JPanel {
             JButton b = bar.add(a);
             b.setHideActionText(false);
             b.setFocusable(false);
+            IconProvider.Key key = toolbarIcons.get(a);
+            javax.swing.Icon icon = key != null ? IconProvider.get().icon(key, 24) : null;
+            if (icon != null) {
+                b.setIcon(icon);
+                b.setVerticalTextPosition(javax.swing.SwingConstants.BOTTOM);
+                b.setHorizontalTextPosition(javax.swing.SwingConstants.CENTER);
+            }
         }
         remoteActions.addAll(List.of(pullAction, pullRebaseAction, pushAction, fetchAction));
+        bar.add(javax.swing.Box.createHorizontalGlue());
+        searchField.putClientProperty("JTextField.placeholderText", "Search messages, files, contents");
+        searchField.putClientProperty("JTextField.showClearButton", true);
+        searchField.setMaximumSize(new java.awt.Dimension(320, searchField.getPreferredSize().height));
+        searchField.setToolTipText("return: search the whole history (⌘F), esc: close");
+        searchField.addActionListener(e -> startSearch());
+        searchField.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), "closeSearch");
+        searchField.getActionMap().put("closeSearch", new AbstractAction() {
+            @Override public void actionPerformed(ActionEvent e) { closeSearch(); }
+        });
+        bar.add(searchField);
         abortMergeAction.setEnabled(false);
         return bar;
     }
@@ -376,7 +429,8 @@ public class RepoPanel extends JPanel {
     // refresh
 
     private record Snapshot(Status status, List<Ref> refs, Map<String, List<Ref>> byTarget, String head,
-                            GitRepo.State state, List<Stash> stashes, CommitLog log, List<CommitRow> page, boolean more) {}
+                            GitRepo.State state, List<Stash> stashes, List<GitRepo.Remote> remotes,
+                            CommitLog log, List<CommitRow> page, boolean more) {}
 
     /**
      * reloads refs, status and stashes; the log is rebuilt when refs, HEAD or
@@ -400,11 +454,12 @@ public class RepoPanel extends JPanel {
             }
             Map<String, List<Ref>> byTarget = new HashMap<>();
             for (Ref r : refs) if (r.target() != null) byTarget.computeIfAbsent(r.target(), k -> new ArrayList<>()).add(r);
-            return new Snapshot(status, refs, byTarget, head, repo.state(), repo.stashes(), log, page, more);
+            return new Snapshot(status, refs, byTarget, head, repo.state(), repo.stashes(), repo.remotes(), log, page, more);
         }, s -> {
             headBranch = s.head();
             host.titleChanged(this);
-            sidebar.setRefs(s.refs(), headBranch);
+            remotes = s.remotes();
+            sidebar.setRefs(s.refs(), s.remotes(), headBranch);
             sidebar.setStashes(s.stashes());
             applyStatus(s.status(), s.state());
             if (s.page() == null) return; // log unchanged
@@ -481,10 +536,38 @@ public class RepoPanel extends JPanel {
         }
         showingWorking = false;
         selectedCommit = c.oid();
+        rangeOldest = c.oid();
         staging.showCommit(c);
         String oid = c.oid();
         exec.submit(() -> repo.commitFiles(oid), files -> {
             if (!oid.equals(selectedCommit)) return;
+            adjusting = true;
+            staging.commitTable.setFiles(files);
+            adjusting = false;
+            int row = 0;
+            if (pendingReveal != null && pendingReveal.oid().equals(oid) && pendingReveal.path() != null) {
+                for (int i = 0; i < files.size(); i++) if (files.get(i).path().equals(pendingReveal.path())) row = i;
+            }
+            if (!files.isEmpty()) {
+                staging.commitTable.setRowSelectionInterval(row, row);
+                staging.commitTable.scrollRectToVisible(staging.commitTable.getCellRect(row, 0, true));
+            } else {
+                setDiff(null, DiffView.Mode.COMMIT, "No changes");
+            }
+        });
+    }
+
+    /** several commits: the files changed over the whole range, like SourceTree */
+    private void commitsSelected(List<CommitRow> commits) {
+        if (adjusting) return;
+        String newest = commits.getFirst().oid();
+        String oldest = commits.getLast().oid();
+        showingWorking = false;
+        selectedCommit = newest;
+        rangeOldest = oldest;
+        staging.showCommits(commits);
+        exec.submit(() -> repo.rangeFiles(oldest, newest), files -> {
+            if (!newest.equals(selectedCommit) || !oldest.equals(rangeOldest)) return;
             adjusting = true;
             staging.commitTable.setFiles(files);
             adjusting = false;
@@ -520,14 +603,20 @@ public class RepoPanel extends JPanel {
         });
     }
 
-    private void showCommitFile(String oid, FileChange f) {
+    /** shows a file changed from the parent of oldest to newest (the same commit for one) */
+    private void showCommitFile(String oldest, String oid, FileChange f) {
         currentFile = null;
-        exec.submit(() -> repo.openPatch(oid, f), p -> {
-            if (!oid.equals(selectedCommit)) {
+        exec.submit(() -> repo.openPatch(oldest, oid, f), p -> {
+            if (!oid.equals(selectedCommit) || !oldest.equals(rangeOldest)) {
                 if (p != null) exec.run(p::close, null);
                 return;
             }
             setDiff(p, DiffView.Mode.COMMIT, "No changes");
+            Hit h = pendingReveal;
+            if (h != null && h.oid().equals(oid) && f.path().equals(h.path())) {
+                pendingReveal = null;
+                if (h.kind() == HistorySearch.Kind.CONTENT) diff.reveal(h.origin(), h.line());
+            }
         });
     }
 
@@ -639,7 +728,12 @@ public class RepoPanel extends JPanel {
             JOptionPane.showMessageDialog(this, "Nothing is staged.", "Commit", JOptionPane.INFORMATION_MESSAGE);
             return;
         }
-        exec.submit(() -> amend ? repo.amend(message + "\n") : repo.commit(message + "\n"), oid -> {
+        exec.submit(() -> {
+            GitRepo.RefSnapshot snapshot = repo.snapshotRefs(amend ? "Amend" : "Commit", true);
+            String oid = amend ? repo.amend(message + "\n") : repo.commit(message + "\n");
+            pushUndo(snapshot); // only after it succeeded
+            return oid;
+        }, oid -> {
             try {
                 host.messageHistory().add(message);
             } catch (RuntimeException e) {
@@ -699,6 +793,153 @@ public class RepoPanel extends JPanel {
         menu.show(staging.historyButton, 0, staging.historyButton.getHeight());
     }
 
+    // undo
+
+    /** snapshots before history changing operations, newest last (EDT) */
+    private final java.util.Deque<GitRepo.RefSnapshot> undoStack = new java.util.ArrayDeque<>();
+    private static final int UNDO_LIMIT = 20;
+
+    /** snapshots taken right before an undo, to redo it (EDT) */
+    private final java.util.Deque<GitRepo.RefSnapshot> redoStack = new java.util.ArrayDeque<>();
+
+    {
+        undoAction.setEnabled(false);
+        redoAction.setEnabled(false);
+    }
+
+    /** called on the git thread after an operation succeeded, a new operation forgets the redo history */
+    private void pushUndo(GitRepo.RefSnapshot s) {
+        SwingUtilities.invokeLater(() -> {
+            redoStack.clear();
+            addUndo(s);
+        });
+    }
+
+    private void addUndo(GitRepo.RefSnapshot s) {
+        undoStack.addLast(s);
+        while (undoStack.size() > UNDO_LIMIT) undoStack.removeFirst();
+        updateUndo();
+    }
+
+    private void updateUndo() {
+        GitRepo.RefSnapshot s = undoStack.peekLast();
+        undoAction.setEnabled(s != null);
+        undoAction.putValue(Action.NAME, s != null ? "Undo " + s.label() : "Undo");
+        GitRepo.RefSnapshot r = redoStack.peekLast();
+        redoAction.setEnabled(r != null);
+        redoAction.putValue(Action.NAME, r != null ? "Redo " + r.label() : "Redo");
+    }
+
+    private void redo() {
+        GitRepo.RefSnapshot r = redoStack.peekLast();
+        if (r == null) return;
+        exec.submit(() -> {
+            GitRepo.RefSnapshot back = repo.snapshotRefs(r.label(), r.restore());
+            repo.restore(r);
+            return back;
+        }, back -> {
+            redoStack.remove(r);
+            addUndo(back);
+            statusBar.setText("Redid " + r.label());
+            refreshAll(true);
+        });
+    }
+
+    private void undo() {
+        GitRepo.RefSnapshot s = undoStack.peekLast();
+        if (s == null) return;
+        String what = s.soft() ? "\nThe committed changes come back as staged changes."
+                : "\nThe index and the working copy are reset to the restored HEAD.";
+        if (!confirm("Undo " + s.label() + "?\nHEAD and the local branches go back to where they were." + what, "Undo")) return;
+        exec.submit(() -> {
+            GitRepo.RefSnapshot forward = repo.snapshotRefs(s.label(), s.restore());
+            repo.restore(s);
+            return forward;
+        }, forward -> {
+            undoStack.remove(s);
+            redoStack.addLast(forward);
+            updateUndo();
+            statusBar.setText("Undid " + s.label());
+            refreshAll(true);
+        });
+    }
+
+    // search
+
+    private static final int SEARCH_LIMIT = 1000;
+    /** the search in progress, cancelled by setting its flag */
+    private java.util.concurrent.atomic.AtomicBoolean searchCancel;
+    /** a search result being revealed: the file (and line) is selected once the commit is shown */
+    private Hit pendingReveal;
+
+    {
+        searchPanel.setListener(new SearchPanel.Listener() {
+            @Override public void reveal(Hit hit) { RepoPanel.this.reveal(hit); }
+            @Override public void stop() { if (searchCancel != null) searchCancel.set(true); }
+            @Override public void research() { startSearch(); }
+            @Override public void close() { closeSearch(); }
+        });
+    }
+
+    /**
+     * searches the whole history on its own thread with its own repository handle,
+     * so a long content search does not block the git thread.
+     */
+    private void startSearch() {
+        String q = searchField.getText().strip();
+        if (q.isEmpty() || workdir == null) return;
+        if (searchCancel != null) searchCancel.set(true);
+        java.util.concurrent.atomic.AtomicBoolean cancel = new java.util.concurrent.atomic.AtomicBoolean();
+        searchCancel = cancel;
+        searchPanel.start(q);
+        searchPanel.setVisible(true);
+        revalidate();
+        java.util.Set<HistorySearch.Kind> kinds = searchPanel.kinds();
+        Path wd = workdir;
+        Thread t = new Thread(() -> {
+            try (GitRepo r = new GitRepo(wd)) {
+                HistorySearch.search(r, q, kinds, SEARCH_LIMIT,
+                        hit -> SwingUtilities.invokeLater(() -> { if (!cancel.get()) searchPanel.add(hit); }),
+                        n -> SwingUtilities.invokeLater(() -> { if (searchCancel == cancel) searchPanel.progress(n); }),
+                        cancel::get);
+            } catch (RuntimeException e) {
+                SwingUtilities.invokeLater(() -> showError(e));
+            } finally {
+                SwingUtilities.invokeLater(() -> { if (searchCancel == cancel) searchPanel.done(cancel.get(), SEARCH_LIMIT); });
+            }
+        }, "search");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private void closeSearch() {
+        if (searchCancel != null) searchCancel.set(true);
+        searchPanel.setVisible(false);
+        revalidate();
+        logPanel.getTable().requestFocusInWindow();
+    }
+
+    /** selects the commit of the hit (loading log pages until it appears), then its file and line */
+    private void reveal(Hit hit) {
+        pendingReveal = hit;
+        logPanel.getTable().clearSelection(); // re-selecting the same commit reloads its files
+        if (logPanel.select(hit.oid())) return;
+        exec.submit(() -> {
+            if (log == null) return null;
+            List<CommitRow> more = new ArrayList<>();
+            boolean found = false;
+            while (!found && !log.isDone()) {
+                List<CommitRow> page = log.next(PAGE);
+                more.addAll(page);
+                found = page.stream().anyMatch(r -> r.oid().equals(hit.oid()));
+            }
+            return new Page(log, more, !log.isDone());
+        }, p -> {
+            if (p != null && p.log() == shownLog) logPanel.append(p.rows(), p.more());
+            if (!logPanel.select(hit.oid())) statusBar.setText("not in the log: " + hit.oid().substring(0, 7));
+        });
+    }
+
     // history rewriting
 
     /** GitUp's "Edit Message": the commit and its descendants are rewritten with the same trees */
@@ -723,7 +964,12 @@ public class RepoPanel extends JPanel {
             if (JOptionPane.showConfirmDialog(this, p, "Edit Message", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) return;
             String message = text.getText().strip();
             if (message.isEmpty() || message.equals(c.message().strip())) return;
-            exec.submit(() -> HistoryOps.editMessage(workdir, c.oid(), message + "\n"), newOid -> {
+            exec.submit(() -> {
+                GitRepo.RefSnapshot snapshot = repo.snapshotRefs("Edit Message", false);
+                String oid = HistoryOps.editMessage(workdir, c.oid(), message + "\n");
+                pushUndo(snapshot);
+                return oid;
+            }, newOid -> {
                 statusBar.setText("Rewrote " + c.shortOid() + " as " + newOid.substring(0, 7));
                 selectedCommit = newOid;
                 showingWorking = false;
@@ -784,6 +1030,13 @@ public class RepoPanel extends JPanel {
             };
             exec.submit(() -> {
                 String before = repo.headTree();
+                GitRepo.RefSnapshot snapshot = repo.snapshotRefs(switch (r) {
+                    case SQUASH -> "Squash";
+                    case FIXUP -> "Fixup";
+                    case MOVE_UP -> "Move Up";
+                    case MOVE_DOWN -> "Move Down";
+                    case DELETE -> "Delete Commit";
+                }, false);
                 String result = switch (r) {
                     case SQUASH -> HistoryOps.squashWithParent(workdir, c.oid(), message + "\n");
                     case FIXUP -> HistoryOps.fixupWithParent(workdir, c.oid());
@@ -794,6 +1047,7 @@ public class RepoPanel extends JPanel {
                         yield null;
                     }
                 };
+                pushUndo(snapshot);
                 if (!java.util.Objects.equals(before, repo.headTree())) repo.resetHardToHead();
                 return java.util.Optional.ofNullable(result);
             }, result -> {
@@ -818,6 +1072,166 @@ public class RepoPanel extends JPanel {
             case REMOTE -> exec.run(() -> repo.checkoutRemote(ref.shorthand()), () -> refreshAll(true));
             default -> {}
         }
+    }
+
+    private void renameBranch(Ref branch) {
+        String name = (String) JOptionPane.showInputDialog(this, "New name of " + branch.shorthand() + ":", "Rename Branch",
+                JOptionPane.PLAIN_MESSAGE, null, null, branch.shorthand());
+        if (name == null || name.isBlank() || name.strip().equals(branch.shorthand())) return;
+        exec.run(() -> repo.renameBranch(branch.shorthand(), name.strip()), () -> {
+            statusBar.setText("Renamed " + branch.shorthand() + " to " + name.strip());
+            refreshAll(true);
+        });
+    }
+
+    /**
+     * SourceTree-like "Delete Branches": the local branches with checkboxes (the clicked one checked),
+     * force regardless of merge status, and the remote branches too.
+     */
+    private void deleteBranches(Ref clicked) {
+        exec.submit(() -> {
+            java.util.Map<String, String> upstreams = new java.util.LinkedHashMap<>();
+            for (Ref r : repo.refs()) {
+                if (r.kind() == Ref.Kind.LOCAL && !r.shorthand().equals(headBranch)) upstreams.put(r.shorthand(), repo.upstream(r.shorthand()));
+            }
+            return upstreams;
+        }, upstreams -> {
+            JPanel list = new JPanel(new java.awt.GridLayout(0, 1));
+            java.util.Map<String, JCheckBox> boxes = new java.util.LinkedHashMap<>();
+            for (var e : upstreams.entrySet()) {
+                JCheckBox b = new JCheckBox(e.getKey() + (e.getValue() != null ? "  → " + e.getValue() : ""), e.getKey().equals(clicked.shorthand()));
+                boxes.put(e.getKey(), b);
+                list.add(b);
+            }
+            JCheckBox force = new JCheckBox("Force delete regardless of merge status");
+            JCheckBox remote = new JCheckBox("Also delete the remote branches (→) on the server");
+            JScrollPane scroll = new JScrollPane(list);
+            scroll.setPreferredSize(new java.awt.Dimension(420, Math.min(240, 28 * boxes.size() + 8)));
+            JPanel p = new JPanel(new BorderLayout(0, 6));
+            p.add(new JLabel("Delete local branches:"), BorderLayout.NORTH);
+            p.add(scroll, BorderLayout.CENTER);
+            JPanel options = new JPanel(new java.awt.GridLayout(0, 1));
+            options.add(force);
+            options.add(remote);
+            p.add(options, BorderLayout.SOUTH);
+            if (JOptionPane.showConfirmDialog(this, p, "Delete Branches", JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE) != JOptionPane.OK_OPTION) return;
+            List<String> names = boxes.entrySet().stream().filter(e -> e.getValue().isSelected()).map(java.util.Map.Entry::getKey).toList();
+            if (names.isEmpty()) return;
+            boolean f = force.isSelected();
+            List<String> remoteBranches = remote.isSelected() ? names.stream().map(upstreams::get).filter(java.util.Objects::nonNull).toList() : List.of();
+            exec.submit(() -> {
+                GitRepo.RefSnapshot snapshot = repo.snapshotRefs("Delete Branch", GitRepo.Restore.REFS);
+                List<String> failed = new ArrayList<>();
+                for (String n : names) {
+                    try {
+                        repo.deleteBranch(n, f);
+                    } catch (RuntimeException ex) {
+                        failed.add(ex.getMessage());
+                    }
+                }
+                if (failed.size() < names.size()) pushUndo(snapshot);
+                return failed;
+            }, failed -> {
+                if (!failed.isEmpty()) showError(new IllegalStateException(String.join("\n", failed)));
+                statusBar.setText("Deleted " + (names.size() - failed.size()) + " branch(es)");
+                if (!remoteBranches.isEmpty()) {
+                    remoteOp("Delete remote branches", ops -> {
+                        remoteBranches.forEach(ops::deleteRemoteBranch);
+                        return "deleted " + String.join(", ", remoteBranches);
+                    });
+                } else {
+                    refreshAll(true);
+                }
+            });
+        });
+    }
+
+    private void deleteRemoteBranch(Ref branch) {
+        if (!confirm("Delete the branch " + branch.shorthand() + " on the server?\nThis cannot be undone from here.", "Delete Remote Branch")) return;
+        remoteOp("Delete " + branch.shorthand(), ops -> {
+            ops.deleteRemoteBranch(branch.shorthand());
+            return "deleted";
+        });
+    }
+
+    /** @param remote null for a new remote */
+    private void editRemote(GitRepo.Remote remote) {
+        JTextField name = new JTextField(remote != null ? remote.name() : (hasOrigin() ? "" : "origin"), 30);
+        JTextField url = new JTextField(remote != null ? remote.url() : "", 30);
+        JTextField pushUrl = new JTextField(remote != null && remote.pushUrl() != null ? remote.pushUrl() : "", 30);
+        pushUrl.putClientProperty("JTextField.placeholderText", "same as the URL");
+        JPanel p = new JPanel(new GridLayout(0, 1));
+        p.add(new JLabel("Remote name:"));
+        p.add(name);
+        p.add(new JLabel("URL / path:"));
+        p.add(url);
+        p.add(new JLabel("Push URL (optional):"));
+        p.add(pushUrl);
+        String title = remote != null ? "Edit Remote" : "New Remote";
+        if (JOptionPane.showConfirmDialog(this, p, title, JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) return;
+        String n = name.getText().strip(), u = url.getText().strip(), pu = pushUrl.getText().strip();
+        if (n.isEmpty() || u.isEmpty()) {
+            showError(new IllegalArgumentException("a name and a URL are needed"));
+            return;
+        }
+        exec.run(() -> {
+            if (remote == null) {
+                repo.createRemote(n, u);
+                if (!pu.isEmpty()) repo.editRemote(n, n, u, pu);
+            } else {
+                repo.editRemote(remote.name(), n, u, pu);
+            }
+        }, () -> {
+            statusBar.setText((remote == null ? "Added remote " : "Updated remote ") + n);
+            refreshAll(true);
+        });
+    }
+
+    private boolean hasOrigin() {
+        return remotes.stream().anyMatch(r -> r.name().equals("origin"));
+    }
+
+    private void removeRemote(GitRepo.Remote remote) {
+        if (!confirm("Remove the remote " + remote.name() + " (" + remote.url() + ")?\n"
+                + "Its remote branches are removed from this repository, the repository on the server is not touched.", "Remove Remote")) return;
+        exec.run(() -> repo.removeRemote(remote.name()), () -> {
+            statusBar.setText("Removed remote " + remote.name());
+            refreshAll(true);
+        });
+    }
+
+    /** SourceTree's "Reset current branch to this commit": soft, mixed or hard */
+    private void resetTo(CommitRow c) {
+        String branch = headBranch != null ? headBranch : "HEAD";
+        javax.swing.JRadioButton soft = new javax.swing.JRadioButton("Soft - keep all local changes");
+        javax.swing.JRadioButton mixed = new javax.swing.JRadioButton("Mixed - keep working copy but reset index", true);
+        javax.swing.JRadioButton hard = new javax.swing.JRadioButton("Hard - discard all working copy changes");
+        javax.swing.ButtonGroup g = new javax.swing.ButtonGroup();
+        JPanel p = new JPanel(new GridLayout(0, 1));
+        p.add(new JLabel("Reset " + branch + " to " + c.shortOid() + " \"" + c.summary() + "\""));
+        p.add(new JLabel("Using mode:"));
+        for (javax.swing.JRadioButton b : new javax.swing.JRadioButton[] {soft, mixed, hard}) {
+            g.add(b);
+            p.add(b);
+        }
+        if (JOptionPane.showConfirmDialog(this, p, "Reset to Commit", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) return;
+        int type = soft.isSelected() ? vavi.apps.gitup.jna.LibGit2.GIT_RESET_SOFT
+                : mixed.isSelected() ? vavi.apps.gitup.jna.LibGit2.GIT_RESET_MIXED : vavi.apps.gitup.jna.LibGit2.GIT_RESET_HARD;
+        GitRepo.Restore undoMode = soft.isSelected() ? GitRepo.Restore.REFS : mixed.isSelected() ? GitRepo.Restore.INDEX : GitRepo.Restore.ALL;
+        if (hard.isSelected() && (logPanel.hasUncommitted())
+                && !confirm("A hard reset discards all uncommitted changes of the working copy.\nThey cannot be recovered, even by undo.", "Reset (Hard)")) {
+            return;
+        }
+        exec.submit(() -> {
+            if (repo.state() != GitRepo.State.NONE) throw new IllegalStateException("finish or abort the merge / rebase in progress first");
+            GitRepo.RefSnapshot snapshot = repo.snapshotRefs("Reset", undoMode);
+            repo.reset(c.oid(), type);
+            pushUndo(snapshot);
+            return null;
+        }, x -> {
+            statusBar.setText("Reset " + branch + " to " + c.shortOid());
+            refreshAll(true);
+        });
     }
 
     /** @param oid null for HEAD */
@@ -901,7 +1315,9 @@ public class RepoPanel extends JPanel {
     private void pull(Boolean rebase) {
         remoteOp(Boolean.TRUE.equals(rebase) ? "Pull (rebase)" : "Pull", ops -> {
             ops.fetchAll();
+            GitRepo.RefSnapshot snapshot = repo.snapshotRefs("Pull", false);
             PullResult r = repo.pullFromUpstream(rebase != null ? rebase : repo.isPullRebaseConfigured());
+            if (r == PullResult.FAST_FORWARD || r == PullResult.MERGED || r == PullResult.REBASED) pushUndo(snapshot);
             if (r == PullResult.CONFLICTS || r == PullResult.REBASE_CONFLICTS) {
                 boolean rb = r == PullResult.REBASE_CONFLICTS;
                 SwingUtilities.invokeLater(() -> JOptionPane.showMessageDialog(this,

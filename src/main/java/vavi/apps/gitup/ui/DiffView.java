@@ -154,6 +154,30 @@ public class DiffView extends JComponent implements Scrollable {
         SwingUtilities.invokeLater(() -> scrollRectToVisible(r));
     }
 
+    /**
+     * selects and scrolls to a changed line.
+     *
+     * @param origin '+' (line is on the new side) or '-' (on the old side)
+     * @return false when not found
+     */
+    public boolean reveal(char origin, int line) {
+        if (patch == null || message != null) return false;
+        for (int r = 0; r < rows(); r++) {
+            Row row = patch.row(r);
+            if (row.origin() == origin && (origin == '+' ? row.newLineno() : row.oldLineno()) == line) {
+                selection.clear();
+                selection.set(r);
+                anchor = r;
+                int y = r * rowHeight;
+                Rectangle v = getVisibleRect();
+                scrollRectToVisible(new Rectangle(v.x, Math.max(0, y - v.height / 3), 1, v.height));
+                repaint();
+                return true;
+            }
+        }
+        return false;
+    }
+
     public BitSet getSelection() {
         return (BitSet) selection.clone();
     }

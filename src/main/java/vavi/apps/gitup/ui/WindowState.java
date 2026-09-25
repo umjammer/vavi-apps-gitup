@@ -127,4 +127,12 @@ public final class WindowState {
     public static void setFlag(String key, boolean value) {
         prefs.putBoolean(key, value);
     }
+
+    public static String getString(String key, String def) {
+        return prefs.get(key, def);
+    }
+
+    public static void putString(String key, String value) {
+        prefs.put(key, value);
+    }
 }

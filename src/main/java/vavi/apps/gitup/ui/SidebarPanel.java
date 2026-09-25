@@ -11,23 +11,30 @@ import java.awt.Component;
 import java.awt.Font;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import javax.swing.JMenuItem;
 import javax.swing.JPanel;
 import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
 import javax.swing.JTree;
+import javax.swing.ToolTipManager;
 import javax.swing.tree.DefaultMutableTreeNode;
 import javax.swing.tree.DefaultTreeCellRenderer;
 import javax.swing.tree.DefaultTreeModel;
 import javax.swing.tree.TreePath;
 
 import vavi.apps.gitup.model.GitRepo.Ref;
+import vavi.apps.gitup.model.GitRepo.Remote;
 import vavi.apps.gitup.model.GitRepo.Stash;
+import vavi.apps.gitup.ui.icons.IconProvider;
 
 
 /**
- * left sidebar: branches, remotes, tags. double click checks out.
+ * left sidebar: branches, remotes (each with its branches), tags, stashes.
+ * double click checks out (or applies a stash), right click shows SourceTree-like menus.
  *
  * @author <a href="mailto:umjammer@gmail.com">Naohide Sano</a> (nsano)
  * @version 0.00 2026-09-25 nsano initial version <br>
@@ -42,6 +49,15 @@ public class SidebarPanel extends JPanel {
         void stashDrop(Stash stash);
         /** shows the stash's changes */
         void showStash(Stash stash);
+        void newBranch();
+        void renameBranch(Ref branch);
+        /** asks which local branches to delete, the given one checked */
+        void deleteBranch(Ref branch);
+        /** deletes the branch on its remote */
+        void deleteRemoteBranch(Ref branch);
+        void newRemote();
+        void editRemote(Remote remote);
+        void removeRemote(Remote remote);
     }
 
     private final DefaultMutableTreeNode root = new DefaultMutableTreeNode("repository");
@@ -53,6 +69,8 @@ public class SidebarPanel extends JPanel {
     private final JTree tree = new JTree(model);
     private String headBranch;
     private Listener listener;
+    /** remotes the user collapsed, kept over refreshes */
+    private final Set<String> collapsedRemotes = new HashSet<>();
 
     public SidebarPanel() {
         super(new BorderLayout());
@@ -63,22 +81,25 @@ public class SidebarPanel extends JPanel {
         tree.setRootVisible(false);
         tree.setShowsRootHandles(true);
         tree.setCellRenderer(new Renderer());
-        javax.swing.ToolTipManager.sharedInstance().registerComponent(tree);
+        ToolTipManager.sharedInstance().registerComponent(tree);
         tree.addMouseListener(new MouseAdapter() {
             @Override public void mousePressed(MouseEvent e) {
                 if (e.isPopupTrigger()) { popup(e); return; }
-                Stash stash = stashAt(e);
-                if (stash != null && listener != null) {
+                Object o = objectAt(e);
+                if (listener == null) return;
+                if (o instanceof Stash stash) {
                     if (e.getClickCount() == 2) listener.stashApply(stash, false);
                     else listener.showStash(stash);
-                    return;
+                } else if (o instanceof Ref ref) {
+                    if (e.getClickCount() == 2) listener.checkout(ref);
+                    else listener.reveal(ref);
                 }
-                Ref ref = refAt(e);
-                if (ref == null || listener == null) return;
-                if (e.getClickCount() == 2) listener.checkout(ref);
-                else listener.reveal(ref);
             }
             @Override public void mouseReleased(MouseEvent e) { if (e.isPopupTrigger()) popup(e); }
+        });
+        tree.addTreeExpansionListener(new javax.swing.event.TreeExpansionListener() {
+            @Override public void treeExpanded(javax.swing.event.TreeExpansionEvent e) { remoteExpansion(e.getPath(), true); }
+            @Override public void treeCollapsed(javax.swing.event.TreeExpansionEvent e) { remoteExpansion(e.getPath(), false); }
         });
         add(new JScrollPane(tree), BorderLayout.CENTER);
     }
@@ -87,115 +108,167 @@ public class SidebarPanel extends JPanel {
         this.listener = listener;
     }
 
-    public void setRefs(List<Ref> refs, String headBranch) {
-        this.headBranch = headBranch;
-        branches.removeAllChildren();
-        remotes.removeAllChildren();
-        tags.removeAllChildren();
-        for (Ref r : refs) {
-            DefaultMutableTreeNode n = new DefaultMutableTreeNode(r);
-            switch (r.kind()) {
-                case LOCAL -> branches.add(n);
-                case REMOTE -> remotes.add(n);
-                case TAG -> tags.add(n);
-                default -> {}
-            }
+    private boolean updating;
+
+    private void remoteExpansion(TreePath p, boolean expanded) {
+        if (updating) return;
+        if (((DefaultMutableTreeNode) p.getLastPathComponent()).getUserObject() instanceof Remote r) {
+            if (expanded) collapsedRemotes.remove(r.name());
+            else collapsedRemotes.add(r.name());
         }
-        model.reload(branches);
-        model.reload(remotes);
-        model.reload(tags);
-        tree.expandPath(new TreePath(branches.getPath()));
-        tree.expandPath(new TreePath(remotes.getPath()));
+    }
+
+    /** @param remoteList remotes, their branches are grouped under them */
+    public void setRefs(List<Ref> refs, List<Remote> remoteList, String headBranch) {
+        this.headBranch = headBranch;
+        updating = true;
+        try {
+            branches.removeAllChildren();
+            remotes.removeAllChildren();
+            tags.removeAllChildren();
+            // longest remote name first, a remote name may contain '/'
+            List<Remote> byLength = remoteList.stream().sorted(Comparator.comparingInt((Remote r) -> r.name().length()).reversed()).toList();
+            java.util.Map<String, DefaultMutableTreeNode> remoteNodes = new java.util.LinkedHashMap<>();
+            for (Remote r : remoteList) remoteNodes.put(r.name(), new DefaultMutableTreeNode(r));
+            for (Ref r : refs) {
+                DefaultMutableTreeNode n = new DefaultMutableTreeNode(r, false);
+                switch (r.kind()) {
+                    case LOCAL -> branches.add(n);
+                    case REMOTE -> {
+                        Remote owner = byLength.stream().filter(x -> r.shorthand().startsWith(x.name() + "/")).findFirst().orElse(null);
+                        if (owner != null) remoteNodes.get(owner.name()).add(n);
+                        else remotes.add(n);
+                    }
+                    case TAG -> tags.add(n);
+                    default -> {}
+                }
+            }
+            remoteNodes.values().forEach(remotes::add);
+            model.reload(branches);
+            model.reload(remotes);
+            model.reload(tags);
+            tree.expandPath(new TreePath(branches.getPath()));
+            tree.expandPath(new TreePath(remotes.getPath()));
+            for (DefaultMutableTreeNode n : remoteNodes.values()) {
+                if (!collapsedRemotes.contains(((Remote) n.getUserObject()).name())) tree.expandPath(new TreePath(n.getPath()));
+            }
+        } finally {
+            updating = false;
+        }
     }
 
     public void setStashes(List<Stash> list) {
         stashes.removeAllChildren();
-        for (Stash s : list) stashes.add(new DefaultMutableTreeNode(s));
+        for (Stash s : list) stashes.add(new DefaultMutableTreeNode(s, false));
         model.reload(stashes);
         tree.expandPath(new TreePath(stashes.getPath()));
     }
 
-    private Stash stashAt(MouseEvent e) {
+    private DefaultMutableTreeNode nodeAt(MouseEvent e) {
         TreePath p = tree.getPathForLocation(e.getX(), e.getY());
-        if (p == null) return null;
-        Object o = ((DefaultMutableTreeNode) p.getLastPathComponent()).getUserObject();
-        return o instanceof Stash s ? s : null;
+        return p == null ? null : (DefaultMutableTreeNode) p.getLastPathComponent();
     }
 
-    private Ref refAt(MouseEvent e) {
-        TreePath p = tree.getPathForLocation(e.getX(), e.getY());
-        if (p == null) return null;
-        Object o = ((DefaultMutableTreeNode) p.getLastPathComponent()).getUserObject();
-        return o instanceof Ref r ? r : null;
+    private Object objectAt(MouseEvent e) {
+        DefaultMutableTreeNode n = nodeAt(e);
+        return n == null ? null : n.getUserObject();
     }
 
     private void popup(MouseEvent e) {
-        Stash stash = stashAt(e);
-        if (stash != null) {
-            stashPopup(e, stash);
+        DefaultMutableTreeNode node = nodeAt(e);
+        if (node == null || listener == null) return;
+        tree.setSelectionPath(new TreePath(node.getPath()));
+        Object o = node.getUserObject();
+        JPopupMenu menu = new JPopupMenu();
+        if (node == branches) {
+            item(menu, "New Branch…", listener::newBranch);
+        } else if (node == remotes) {
+            item(menu, "New Remote…", listener::newRemote);
+        } else if (o instanceof Remote r) {
+            item(menu, "Edit Remote…", () -> listener.editRemote(r));
+            item(menu, "Remove Remote…", () -> listener.removeRemote(r));
+            menu.addSeparator();
+            item(menu, "New Remote…", listener::newRemote);
+            menu.addSeparator();
+            item(menu, "Copy URL", () -> LogPanel.copy(r.url()));
+            item(menu, "Copy Name", () -> LogPanel.copy(r.name()));
+        } else if (o instanceof Stash stash) {
+            item(menu, "Apply Stash", () -> listener.stashApply(stash, false));
+            item(menu, "Apply and Delete (Pop)", () -> listener.stashApply(stash, true));
+            item(menu, "Delete Stash…", () -> listener.stashDrop(stash));
+            menu.addSeparator();
+            item(menu, "Copy Message", () -> LogPanel.copy(stash.message()));
+            item(menu, "Copy SHA", () -> LogPanel.copy(stash.oid()));
+        } else if (o instanceof Ref ref) {
+            boolean head = ref.kind() == Ref.Kind.LOCAL && ref.shorthand().equals(headBranch);
+            switch (ref.kind()) {
+                case LOCAL -> {
+                    item(menu, "Checkout " + ref.shorthand(), () -> listener.checkout(ref)).setEnabled(!head);
+                    menu.addSeparator();
+                    item(menu, "Rename " + ref.shorthand() + "…", () -> listener.renameBranch(ref));
+                    item(menu, "Delete " + ref.shorthand() + "…", () -> listener.deleteBranch(ref)).setEnabled(!head);
+                    menu.addSeparator();
+                }
+                case REMOTE -> {
+                    item(menu, "Checkout as Local Branch", () -> listener.checkout(ref));
+                    menu.addSeparator();
+                    item(menu, "Delete " + ref.shorthand() + " from the Remote…", () -> listener.deleteRemoteBranch(ref));
+                    menu.addSeparator();
+                }
+                default -> {}
+            }
+            item(menu, "Copy Name", () -> LogPanel.copy(ref.shorthand()));
+            item(menu, "Copy SHA", () -> LogPanel.copy(ref.target())).setEnabled(ref.target() != null);
+        } else {
             return;
         }
-        Ref ref = refAt(e);
-        if (ref == null) return;
-        tree.setSelectionPath(tree.getPathForLocation(e.getX(), e.getY()));
-        JPopupMenu menu = new JPopupMenu();
-        if (ref.kind() != Ref.Kind.TAG) {
-            JMenuItem checkout = new JMenuItem(ref.kind() == Ref.Kind.REMOTE ? "Checkout as Local Branch" : "Checkout");
-            checkout.addActionListener(ev -> { if (listener != null) listener.checkout(ref); });
-            checkout.setEnabled(!(ref.kind() == Ref.Kind.LOCAL && ref.shorthand().equals(headBranch)));
-            menu.add(checkout);
-            menu.addSeparator();
-        }
-        JMenuItem copy = new JMenuItem("Copy Name");
-        copy.addActionListener(ev -> LogPanel.copy(ref.shorthand()));
-        menu.add(copy);
-        JMenuItem copyOid = new JMenuItem("Copy SHA");
-        copyOid.setEnabled(ref.target() != null);
-        copyOid.addActionListener(ev -> LogPanel.copy(ref.target()));
-        menu.add(copyOid);
         menu.show(tree, e.getX(), e.getY());
     }
 
-    private void stashPopup(MouseEvent e, Stash stash) {
-        tree.setSelectionPath(tree.getPathForLocation(e.getX(), e.getY()));
-        JPopupMenu menu = new JPopupMenu();
-        JMenuItem apply = new JMenuItem("Apply Stash");
-        apply.addActionListener(ev -> { if (listener != null) listener.stashApply(stash, false); });
-        menu.add(apply);
-        JMenuItem pop = new JMenuItem("Apply and Delete (Pop)");
-        pop.addActionListener(ev -> { if (listener != null) listener.stashApply(stash, true); });
-        menu.add(pop);
-        JMenuItem drop = new JMenuItem("Delete Stash…");
-        drop.addActionListener(ev -> { if (listener != null) listener.stashDrop(stash); });
-        menu.add(drop);
-        menu.addSeparator();
-        JMenuItem copy = new JMenuItem("Copy Message");
-        copy.addActionListener(ev -> LogPanel.copy(stash.message()));
-        menu.add(copy);
-        JMenuItem copyOid = new JMenuItem("Copy SHA");
-        copyOid.addActionListener(ev -> LogPanel.copy(stash.oid()));
-        menu.add(copyOid);
-        menu.show(tree, e.getX(), e.getY());
+    private static JMenuItem item(JPopupMenu menu, String label, Runnable r) {
+        JMenuItem i = new JMenuItem(label);
+        i.addActionListener(ev -> r.run());
+        menu.add(i);
+        return i;
     }
 
     private class Renderer extends DefaultTreeCellRenderer {
         @Override
         public Component getTreeCellRendererComponent(JTree t, Object v, boolean sel, boolean exp, boolean leaf, int row, boolean focus) {
             super.getTreeCellRendererComponent(t, v, sel, exp, leaf, row, focus);
-            Object o = ((DefaultMutableTreeNode) v).getUserObject();
+            DefaultMutableTreeNode n = (DefaultMutableTreeNode) v;
+            Object o = n.getUserObject();
+            setToolTipText(null);
             if (o instanceof Stash st) {
                 setText(st.message());
                 setFont(t.getFont());
-                setIcon(null);
+                setIcon(IconProvider.get().icon(IconProvider.Key.STASH_ITEM, 16));
                 setToolTipText("stash@{" + st.index() + "} " + st.oid().substring(0, 7));
+            } else if (o instanceof Remote r) {
+                setText(r.name());
+                setFont(t.getFont());
+                setIcon(IconProvider.get().icon(IconProvider.Key.REMOTES, 16));
+                setToolTipText(r.url() + (r.pushUrl() != null ? " (push: " + r.pushUrl() + ")" : ""));
             } else if (o instanceof Ref r) {
                 boolean head = r.kind() == Ref.Kind.LOCAL && r.shorthand().equals(headBranch);
-                setText(r.shorthand());
+                // remote branches are shown under their remote, without its name
+                String text = r.shorthand();
+                if (r.kind() == Ref.Kind.REMOTE && n.getParent() instanceof DefaultMutableTreeNode p && p.getUserObject() instanceof Remote rm) {
+                    text = text.substring(rm.name().length() + 1);
+                }
+                setText(text);
                 setFont(t.getFont().deriveFont(head ? Font.BOLD : Font.PLAIN));
-                setIcon(null);
+                setIcon(IconProvider.get().icon(switch (r.kind()) {
+                    case REMOTE -> IconProvider.Key.REMOTE_BRANCH;
+                    case TAG -> IconProvider.Key.TAG_ITEM;
+                    default -> IconProvider.Key.LOCAL_BRANCH;
+                }, 16));
+                setToolTipText(r.name());
             } else {
                 setFont(t.getFont().deriveFont(Font.BOLD, t.getFont().getSize2D() - 1));
-                setIcon(null);
+                IconProvider.Key key = n == branches ? IconProvider.Key.BRANCHES : n == remotes ? IconProvider.Key.REMOTES
+                        : n == tags ? IconProvider.Key.TAGS : n == stashes ? IconProvider.Key.STASHES : null;
+                setIcon(key != null ? IconProvider.get().icon(key, 16) : null);
             }
             return this;
         }

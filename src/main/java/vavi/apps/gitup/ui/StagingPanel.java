@@ -171,6 +171,16 @@ public class StagingPanel extends JPanel {
         cards.show(this, "working");
     }
 
+    /** a multiple selection: the commits of the range, oldest parent to newest */
+    public void showCommits(java.util.List<CommitRow> commits) {
+        StringBuilder sb = new StringBuilder(commits.size() + " commits selected, changes from "
+                + commits.getLast().shortOid() + "^ to " + commits.getFirst().shortOid() + "\n\n");
+        for (CommitRow c : commits) sb.append(c.shortOid()).append("  ").append(c.summary()).append("  (").append(c.author()).append(")\n");
+        commitInfo.setText(sb.toString());
+        commitInfo.setCaretPosition(0);
+        cards.show(this, "commit");
+    }
+
     public void showCommit(CommitRow c) {
         commitInfo.setText("commit " + c.oid() + "\n"
                 + (c.parents().isEmpty() ? "" : "parents " + String.join(" ", c.parents().stream().map(p -> p.substring(0, 7)).toList()) + "\n")
