@@ -7,6 +7,155 @@
   <artifactId>vavi-apps-gitup</artifactId>
   <version>0.0.1-SNAPSHOT</version>
 
+  <properties>
+    <!-- a repository to open in addition to the restored tabs -->
+    <repo></repo>
+    <!-- the .app name, not "GitUp": it would be taken for GitUp.app -->
+    <javapackager.name>VaviGitUp</javapackager.name>
+    <javapackager.assetsDir>src/main/package</javapackager.assetsDir>
+  </properties>
+
+  <profiles>
+    <!-- target/VaviGitUp/VaviGitUp.app (same as vavi-apps-hub) -->
+    <profile>
+      <id>release</id>
+      <activation>
+        <os>
+          <family>mac</family>
+        </os>
+      </activation>
+      <properties>
+        <installer>false</installer>
+      </properties>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>pl.project13.maven</groupId>
+            <artifactId>git-commit-id-plugin</artifactId>
+            <version>4.9.10</version>
+            <executions>
+              <execution>
+                <id>get-the-git-infos</id>
+                <goals>
+                  <goal>revision</goal>
+                </goals>
+                <phase>initialize</phase>
+              </execution>
+            </executions>
+            <configuration>
+              <generateGitPropertiesFile>false</generateGitPropertiesFile>
+              <includeOnlyProperties>
+                <includeOnlyProperty>^git.build.(time|version)$</includeOnlyProperty>
+              </includeOnlyProperties>
+              <commitIdGenerationMode>full</commitIdGenerationMode>
+            </configuration>
+          </plugin>
+
+          <plugin>
+            <groupId>io.github.fvarrui</groupId>
+            <artifactId>javapackager</artifactId>
+            <version>1.7.5</version>
+            <executions>
+              <execution>
+                <phase>package</phase>
+                <goals>
+                  <goal>package</goal>
+                </goals>
+                <configuration>
+                  <name>${javapackager.name}</name>
+                  <organizationName>Copyright © 2026 by vavi, All rights reserved.</organizationName>
+
+                  <mainClass>vavi.apps.gitup.Main</mainClass>
+                  <runnableJar>${project.artifactId}-${project.version}.jar</runnableJar>
+                  <generateInstaller>${installer}</generateInstaller>
+                  <bundleJre>false</bundleJre>
+                  <jreMinVersion>25</jreMinVersion>
+
+                  <assetsDir>${javapackager.assetsDir}</assetsDir>
+
+                  <additionalResources>
+                    <additionalResource>${project.build.resources[0].directory}/logging.properties</additionalResource>
+                  </additionalResources>
+
+                  <!-- keep in sync with src/main/native/launcher.c -->
+                  <vmArgs>
+                    <vmArg>--enable-native-access=ALL-UNNAMED</vmArg>
+                    <vmArg>--sun-misc-unsafe-memory-access=allow</vmArg>
+                    <vmArg>-Dapple.laf.useScreenMenuBar=true</vmArg>
+                    <vmArg>-Djava.util.logging.config.file=./logging.properties</vmArg>
+                  </vmArgs>
+
+                  <macConfig>
+                    <!-- true cause error -->
+                    <codesignApp>false</codesignApp>
+                    <generatePkg>false</generatePkg>
+                    <infoPlist>
+                      <additionalEntries>
+                        <![CDATA[
+                      <key>CFBundleName</key>
+                      <string>${javapackager.name}</string>
+                      <key>CFBundleShortVersionString</key>
+                      <string>${git.build.time}</string>
+                    ]]>
+                      </additionalEntries>
+                    </infoPlist>
+                  </macConfig>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-antrun-plugin</artifactId>
+            <version>3.1.0</version>
+            <executions>
+              <execution>
+                <id>patch-universal-java-application-stub</id>
+                <phase>package</phase>
+                <goals>
+                  <goal>run</goal>
+                </goals>
+                <configuration>
+                  <target>
+                    <!-- Fix CFBundlePackageType from BNDL to APPL for standard macOS application -->
+                    <replace file="${project.build.directory}/${javapackager.name}/${javapackager.name}.app/Contents/Info.plist"
+                             token="&lt;string&gt;BNDL&lt;/string&gt;"
+                             value="&lt;string&gt;APPL&lt;/string&gt;" />
+                    <replace file="${project.build.directory}/${javapackager.name}/${javapackager.name}.app/Contents/Info.plist"
+                             token="&lt;string&gt;universalJavaApplicationStub&lt;/string&gt;"
+                             value="&lt;string&gt;${javapackager.name}&lt;/string&gt;" />
+                    <!-- native Mach-O launcher (JLI_Launch in process) instead of the shell script stub -->
+                    <exec executable="clang" failonerror="true">
+                      <arg value="-arch" />
+                      <arg value="arm64" />
+                      <arg value="-o" />
+                      <arg value="${project.build.directory}/${javapackager.name}/${javapackager.name}.app/Contents/MacOS/${javapackager.name}" />
+                      <arg value="${project.basedir}/src/main/native/launcher.c" />
+                    </exec>
+                    <chmod file="${project.build.directory}/${javapackager.name}/${javapackager.name}.app/Contents/MacOS/${javapackager.name}"
+                           perm="755" />
+                    <!-- ad-hoc codesign with a stable designated requirement so macOS permissions persist across builds -->
+                    <exec executable="codesign" failonerror="false">
+                      <arg value="--force" />
+                      <arg value="--deep" />
+                      <arg value="--sign" />
+                      <arg value="-" />
+                      <arg value="--identifier" />
+                      <arg value="${javapackager.name}" />
+                      <arg value="--requirements" />
+                      <arg value="=designated =&gt; identifier &quot;${javapackager.name}&quot;" />
+                      <arg value="${project.build.directory}/${javapackager.name}/${javapackager.name}.app" />
+                    </exec>
+                  </target>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
+
   <build>
     <plugins>
       <plugin>
@@ -25,6 +174,7 @@
           <argLine>
             -Djava.util.logging.config.file=${project.build.testOutputDirectory}/logging.properties
             --enable-native-access=ALL-UNNAMED
+            --sun-misc-unsafe-memory-access=allow
             -Djava.awt.headless=true
           </argLine>
           <trimStackTrace>false</trimStackTrace>
@@ -50,6 +200,7 @@
           <executable>java</executable>
           <arguments>
             <argument>--enable-native-access=ALL-UNNAMED</argument>
+            <argument>--sun-misc-unsafe-memory-access=allow</argument>
             <argument>-Dapple.laf.useScreenMenuBar=true</argument>
             <argument>-Djava.util.logging.config.file=${project.basedir}/src/test/resources/logging.properties</argument>
             <argument>-cp</argument>
@@ -80,11 +231,6 @@
       </dependency>
     </dependencies>
   </dependencyManagement>
-
-  <properties>
-    <!-- a repository to open in addition to the restored tabs -->
-    <repo></repo>
-  </properties>
 
   <dependencies>
     <dependency>
