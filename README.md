@@ -20,22 +20,27 @@ SourceTree-like git GUI (Swing) using [GitUp](https://gitup.co)'s `GitUpKit.fram
    (`-Dgitup.icons=builtin|sourcetree`, `-Dgitup.sourcetree=/path/to/Sourcetree.app`)
  * 3 panes: log with graph / staged + unstaged files (checkbox, drag & drop) / hunk diff
  * hunk diff is lazy: only hunk headers are read when a file is selected, line texts are fetched only for the visible rows
- * stage / unstage / discard by file, hunk, or selected lines
+ * stage / unstage / discard by file, hunk, or selected lines; on a commit: reverse a hunk or selected lines into the working copy
  * file menu: open (default application), resolve using mine / theirs, stop tracking, ignore… (exact file, extension, everything beneath a folder, custom pattern;
    into .gitignore, .git/info/exclude or the global ignore file), move to trash
  * commit, amend, commit message history (last 50, `-Dgitup.messageHistory=` to change)
  * log columns: graph, description, commit, author (with email), date; select several commits to see the changes of the range
  * undo (⌘Z) / redo (⇧⌘Z) of commit, amend, pull, reset, branch deletion and history rewrites
-   (branches and HEAD go back; a commit's changes come back staged)
+   (branches and HEAD go back; a commit's changes come back staged), kept over restarts
  * GitUp's history rewriting in the log: edit message, squash / fixup into parent, move up / down, delete commit
  * branches / remotes / tags / stashes sidebar, checkout, new branch, stash / apply / pop / delete, show a stash's changes
  * branches: rename, delete (SourceTree-like dialog: several at once, force regardless of merge status, the remote branches too),
    delete a branch on the server
  * remotes (each with its branches in the sidebar): new, edit (name, URL, push URL), remove
  * reset the current branch to a commit: soft / mixed / hard
+ * in the log: checkout (a branch at the commit or detached HEAD, optionally discarding local changes),
+   merge (commit immediately or not, no fast-forward), cherry-pick (commit immediately or not, keeps the author,
+   a merge commit against a chosen parent)
  * fetch / push (GitUpKit transport, ssh keys, credential prompts),
    pull (fast-forward, merge or rebase: "Pull with Rebase" or `pull.rebase`; on conflicts resolve, then commit / continue, or abort)
  * live refresh with FSEvents (changes to ignored files only are skipped)
+ * command history (⇧⌘H): the git commands equivalent to what was done (libgit2 / GitUpKit calls, GitUp's rewrites as
+   `git rebase -i` with a note), ⌘C copies them ready for a terminal
  * copy (⌘C) almost everywhere, context menus for SHA, message, paths, lines, hunks, patch
 
 ## Usage
@@ -72,4 +77,3 @@ without a repository the last session's tabs are restored, or the repository bro
 ## TODO
 
  * conflict resolution while rewriting history (GitUp's resolver)
- * undo across restarts

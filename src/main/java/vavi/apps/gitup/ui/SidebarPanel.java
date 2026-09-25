@@ -81,6 +81,7 @@ public class SidebarPanel extends JPanel {
         tree.setRootVisible(false);
         tree.setShowsRootHandles(true);
         tree.setCellRenderer(new Renderer());
+        tree.setRowHeight(tree.getFontMetrics(tree.getFont()).getHeight() + 10); // roomier lines
         ToolTipManager.sharedInstance().registerComponent(tree);
         tree.addMouseListener(new MouseAdapter() {
             @Override public void mousePressed(MouseEvent e) {

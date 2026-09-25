@@ -57,7 +57,8 @@ public class DiffView extends JComponent implements Scrollable {
     /** what the shown patch is, decides the available actions */
     public enum Mode { UNSTAGED, STAGED, COMMIT }
 
-    public enum Action { STAGE, UNSTAGE, DISCARD }
+    /** REVERSE: apply the inverse of a commit's hunk / lines to the working copy (SourceTree's "Reverse hunk") */
+    public enum Action { STAGE, UNSTAGE, DISCARD, REVERSE }
 
     /** receives stage / unstage / discard requests, rows are patch rows (a header row means the whole hunk) */
     public interface Listener {
@@ -304,11 +305,12 @@ public class DiffView extends JComponent implements Scrollable {
     }
 
     private void paintHeaderButtons(Graphics2D g, int hunk, Rectangle visible, int y) {
-        if (mode == Mode.COMMIT) return;
         boolean lines = hunkHasSelection(hunk);
         String what = lines ? "lines" : "hunk";
         List<Object[]> list = new ArrayList<>();
-        if (mode == Mode.UNSTAGED) {
+        if (mode == Mode.COMMIT) {
+            list.add(new Object[] {"Reverse " + what, Action.REVERSE});
+        } else if (mode == Mode.UNSTAGED) {
             list.add(new Object[] {"Discard " + what, Action.DISCARD});
             list.add(new Object[] {"Stage " + what, Action.STAGE});
         } else {
@@ -424,6 +426,10 @@ public class DiffView extends JComponent implements Scrollable {
         } else if (mode == Mode.STAGED) {
             add(menu, "Unstage Lines", sel, () -> fire(Action.UNSTAGE, selection));
             add(menu, "Unstage Hunk", true, () -> fire(Action.UNSTAGE, hunkRows(hunk)));
+            menu.addSeparator();
+        } else {
+            add(menu, "Reverse Lines", sel, () -> fire(Action.REVERSE, selection));
+            add(menu, "Reverse Hunk", true, () -> fire(Action.REVERSE, hunkRows(hunk)));
             menu.addSeparator();
         }
         add(menu, "Copy Lines", sel, this::copySelection);

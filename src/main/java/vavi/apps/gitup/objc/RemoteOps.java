@@ -51,6 +51,12 @@ public class RemoteOps implements AutoCloseable {
     /** GCRepository.delegate is weak, keep the proxy here */
     private final ObjCObject delegateProxy;
     private final Delegate delegate;
+    private vavi.apps.gitup.model.CommandLog commandLog = new vavi.apps.gitup.model.CommandLog();
+
+    /** where the equivalent git commands go */
+    public void setCommandLog(vavi.apps.gitup.model.CommandLog commandLog) {
+        this.commandLog = commandLog;
+    }
 
     public RemoteOps(Path workdir, Prompter prompter, Consumer<String> progress) {
         NSAutoreleasePool pool = NSAutoreleasePool.new_();
@@ -81,6 +87,7 @@ public class RemoteOps implements AutoCloseable {
             if (remotes == null) throw error("list remotes", e);
             for (int i = 0; i < remotes.count(); i++) {
                 GCRemote remote = Rococoa.cast(remotes.objectAtIndex(i), GCRemote.class);
+                commandLog.add("git fetch --prune " + vavi.apps.gitup.model.CommandLog.quote(remote.name()), "GitUpKit transport");
                 if (!repo.fetchDefaultRemoteBranchesFromRemote_tagMode_prune_updatedTips_error(remote, 0, true, null, e)) {
                     throw error("fetch " + remote.name(), e);
                 }
@@ -97,6 +104,8 @@ public class RemoteOps implements AutoCloseable {
             ObjCObjectByReference e = new ObjCObjectByReference();
             GCBranch branch = repo.findLocalBranchWithName_error(localBranch, e);
             if (branch == null) throw error("branch " + localBranch, e);
+            commandLog.add(hasUpstream ? "git push origin " + vavi.apps.gitup.model.CommandLog.quote(localBranch)
+                    : "git push -u origin " + vavi.apps.gitup.model.CommandLog.quote(localBranch), "GitUpKit transport, to the upstream");
             boolean ok;
             if (hasUpstream) {
                 ok = repo.pushLocalBranchToUpstream_force_usedRemote_error(branch, false, null, e);
@@ -113,6 +122,9 @@ public class RemoteOps implements AutoCloseable {
 
     /** deletes a branch on its remote, e.g. "origin/topic" */
     public void deleteRemoteBranch(String remoteBranch) {
+        int slash = remoteBranch.indexOf('/');
+        commandLog.add("git push " + vavi.apps.gitup.model.CommandLog.quote(remoteBranch.substring(0, Math.max(slash, 0)))
+                + " --delete " + vavi.apps.gitup.model.CommandLog.quote(remoteBranch.substring(slash + 1)), "GitUpKit transport");
         NSAutoreleasePool pool = NSAutoreleasePool.new_();
         try {
             ObjCObjectByReference e = new ObjCObjectByReference();

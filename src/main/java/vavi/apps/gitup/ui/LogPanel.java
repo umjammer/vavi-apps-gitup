@@ -69,6 +69,9 @@ public class LogPanel extends JPanel {
         void rewrite(CommitRow commit, Rewrite rewrite);
         /** SourceTree's "Reset current branch to this commit" */
         void resetTo(CommitRow commit);
+        void checkoutCommit(CommitRow commit);
+        void mergeCommit(CommitRow commit);
+        void cherryPick(CommitRow commit);
     }
 
     /** GitUp's history rewrites offered in the log */
@@ -234,6 +237,14 @@ public class LogPanel extends JPanel {
         if (selected.size() == 1) {
             CommitRow c = selected.getFirst();
             boolean single = c.parents().size() == 1;
+            String head = headBranch != null ? headBranch : "HEAD";
+            // git
+            item(menu, "Checkout…", () -> { if (listener != null) listener.checkoutCommit(c); });
+            item(menu, "Merge into " + head + "…", () -> { if (listener != null) listener.mergeCommit(c); });
+            item(menu, "Cherry-pick…", () -> { if (listener != null) listener.cherryPick(c); });
+            item(menu, "New Branch Here…", () -> { if (listener != null) listener.createBranch(c); });
+            item(menu, "Reset " + head + " to This Commit…", () -> { if (listener != null) listener.resetTo(c); });
+            menu.addSeparator();
             // GitUp's history rewriting
             item(menu, "Edit Message…", () -> { if (listener != null) listener.editMessage(c); });
             rewriteItem(menu, "Squash Into Parent…", c, Rewrite.SQUASH, single);
@@ -241,9 +252,6 @@ public class LogPanel extends JPanel {
             rewriteItem(menu, "Move Up (Swap with Child)", c, Rewrite.MOVE_UP, single);
             rewriteItem(menu, "Move Down (Swap with Parent)", c, Rewrite.MOVE_DOWN, single);
             rewriteItem(menu, "Delete Commit…", c, Rewrite.DELETE, single);
-            menu.addSeparator();
-            item(menu, "New Branch Here…", () -> { if (listener != null) listener.createBranch(c); });
-            item(menu, "Reset " + (headBranch != null ? headBranch : "HEAD") + " to This Commit…", () -> { if (listener != null) listener.resetTo(c); });
             menu.addSeparator();
         }
         javax.swing.JMenu copy = new javax.swing.JMenu("Copy");
@@ -274,10 +282,11 @@ public class LogPanel extends JPanel {
         return list;
     }
 
-    private static void item(JPopupMenu menu, String label, Runnable r) {
+    private static JMenuItem item(JPopupMenu menu, String label, Runnable r) {
         JMenuItem i = new JMenuItem(label);
         i.addActionListener(e -> r.run());
         menu.add(i);
+        return i;
     }
 
     private void rewriteItem(JPopupMenu menu, String label, CommitRow c, Rewrite r, boolean enabled) {

@@ -154,17 +154,19 @@ public class StagingPanel extends JPanel {
 
     /** shows the merge / rebase banner, disables amend (and commit while rebasing) */
     public void setState(vavi.apps.gitup.model.GitRepo.State state) {
+        boolean picking = state == vavi.apps.gitup.model.GitRepo.State.CHERRY_PICK;
         boolean merging = state == vavi.apps.gitup.model.GitRepo.State.MERGE;
         boolean rebasing = state == vavi.apps.gitup.model.GitRepo.State.REBASE;
-        mergeBanner.setVisible(merging || rebasing);
+        mergeBanner.setVisible(merging || rebasing || picking);
         bannerLabel.setText(rebasing ? "Rebasing: resolve conflicts, stage the files, then continue."
+                : picking ? "Cherry-picking: resolve conflicts, stage the files, then commit."
                 : "Merging: resolve conflicts, stage the files, then commit.");
-        abortMergeButton.setText(rebasing ? "Abort Rebase" : "Abort Merge");
+        abortMergeButton.setText(rebasing ? "Abort Rebase" : picking ? "Abort Cherry-pick" : "Abort Merge");
         continueRebaseButton.setVisible(rebasing);
-        amendBox.setEnabled(!merging && !rebasing);
-        if (merging || rebasing) amendBox.setSelected(false);
+        amendBox.setEnabled(!merging && !rebasing && !picking);
+        if (merging || rebasing || picking) amendBox.setSelected(false);
         commitButton.setEnabled(!rebasing);
-        commitButton.setText(merging ? "Commit Merge" : "Commit");
+        commitButton.setText(merging ? "Commit Merge" : picking ? "Commit Cherry-pick" : "Commit");
     }
 
     public void showWorking() {

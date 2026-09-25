@@ -242,6 +242,14 @@ public interface LibGit2 extends Library {
     int git_checkout_tree(Pointer repo, Pointer treeish, Pointer opts);
 
     int GIT_CHECKOUT_SAFE = 1 << 0;
+    int GIT_CHECKOUT_FORCE = 1 << 1;
+
+    /** git_checkout_options with GIT_CHECKOUT_FORCE (local changes are overwritten) */
+    static Pointer forceCheckoutOptions() {
+        Pointer m = safeCheckoutOptions();
+        m.setInt(4, GIT_CHECKOUT_FORCE);
+        return m;
+    }
 
     /** git_checkout_options with GIT_CHECKOUT_SAFE, generously sized */
     static Pointer safeCheckoutOptions() {
@@ -256,6 +264,7 @@ public interface LibGit2 extends Library {
 
     int GIT_REPOSITORY_STATE_NONE = 0;
     int GIT_REPOSITORY_STATE_MERGE = 1;
+    int GIT_REPOSITORY_STATE_CHERRYPICK = 4;
     int GIT_REPOSITORY_STATE_REBASE = 7;
     int GIT_REPOSITORY_STATE_REBASE_INTERACTIVE = 8;
     int GIT_REPOSITORY_STATE_REBASE_MERGE = 9;
@@ -272,6 +281,30 @@ public interface LibGit2 extends Library {
     int git_merge_analysis(IntByReference analysis, IntByReference preference, Pointer repo, Pointer[] theirHeads, NativeLong len);
     int git_merge(Pointer repo, Pointer[] theirHeads, NativeLong len, Pointer mergeOpts, Pointer checkoutOpts);
     int git_repository_state_cleanup(Pointer repo);
+    /** opts may be NULL: GIT_CHECKOUT_SAFE | GIT_CHECKOUT_ALLOW_CONFLICTS */
+    int git_cherrypick(Pointer repo, Pointer commit, Pointer opts);
+    int git_cherrypick_options_init(Pointer opts, int version);
+
+    /**
+     * git_cherrypick_options choosing the mainline parent of a merge commit, with
+     * GIT_CHECKOUT_SAFE | GIT_CHECKOUT_ALLOW_CONFLICTS.
+     * <pre>
+     * unsigned int version @0; unsigned int mainline @4;
+     * git_merge_options merge_opts @8 (48 bytes); git_checkout_options checkout_opts @56 (strategy @60)
+     * </pre>
+     * the layout is checked with the values git_cherrypick_options_init writes.
+     */
+    static Pointer cherrypickOptions(int mainline) {
+        com.sun.jna.Memory m = new com.sun.jna.Memory(1024);
+        m.clear();
+        INSTANCE.git_cherrypick_options_init(m, 1);
+        if (m.getInt(0) != 1 || m.getInt(8) != 1 || m.getInt(56) != 1 || m.getInt(60) != GIT_CHECKOUT_SAFE) {
+            throw new IllegalStateException("unexpected git_cherrypick_options layout in this libgit2");
+        }
+        m.setInt(4, mainline);
+        m.setInt(60, GIT_CHECKOUT_SAFE | GIT_CHECKOUT_ALLOW_CONFLICTS);
+        return m;
+    }
     int git_reset(Pointer repo, Pointer target, int resetType, Pointer checkoutOpts);
 
     // rebase

@@ -425,6 +425,7 @@ public class RepositoryBrowser extends JFrame {
         @Override
         public Component getTreeCellRendererComponent(JTree t, Object v, boolean sel, boolean exp, boolean leaf, int row, boolean focus) {
             super.getTreeCellRendererComponent(t, v, sel, exp, leaf, row, focus);
+            setBorder(javax.swing.BorderFactory.createEmptyBorder(4, 2, 4, 2)); // roomier lines (rows have variable height)
             Object o = ((DefaultMutableTreeNode) v).getUserObject();
             setIcon(null);
             if (o instanceof Repo r) {

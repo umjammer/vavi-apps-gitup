@@ -80,6 +80,38 @@ public class GitRepo implements AutoCloseable {
         return workdir;
     }
 
+    private CommandLog commandLog = new CommandLog();
+
+    /** the equivalent git commands of what this repository object does */
+    public CommandLog commandLog() {
+        return commandLog;
+    }
+
+    public void setCommandLog(CommandLog commandLog) {
+        this.commandLog = commandLog;
+    }
+
+    private void cmd(String command) {
+        commandLog.add(command);
+    }
+
+    private void cmd(String command, String note) {
+        commandLog.add(command, note);
+    }
+
+    private static String q(String s) {
+        return CommandLog.quote(s);
+    }
+
+    private static List<String> pathsOf(Collection<FileChange> files) {
+        List<String> list = new ArrayList<>();
+        for (FileChange f : files) {
+            list.add(f.path());
+            if (f.oldPath() != null && !f.oldPath().equals(f.path())) list.add(f.oldPath());
+        }
+        return list;
+    }
+
     /** the .git directory */
     public Path gitDir() {
         return Path.of(git.git_repository_path(handle()));
@@ -372,6 +404,7 @@ public class GitRepo implements AutoCloseable {
 
     /** stages whole files */
     public void stage(Collection<FileChange> files) {
+        cmd("git add " + CommandLog.paths(pathsOf(files)));
         Pointer index = index();
         try {
             for (FileChange f : files) {
@@ -392,6 +425,7 @@ public class GitRepo implements AutoCloseable {
 
     /** unstages whole files (resets the index entries to HEAD) */
     public void unstage(Collection<FileChange> files) {
+        cmd(isHeadUnborn() ? "git rm --cached -q " + CommandLog.paths(pathsOf(files)) : "git reset -q HEAD " + CommandLog.paths(pathsOf(files)));
         List<String> paths = new ArrayList<>();
         for (FileChange f : files) {
             paths.add(f.path());
@@ -420,6 +454,12 @@ public class GitRepo implements AutoCloseable {
 
     /** applies a unified diff to the index or the working directory */
     public void apply(String patchText, int location) {
+        cmd("git apply" + (location == GIT_APPLY_LOCATION_INDEX ? " --cached" : location == GIT_APPLY_LOCATION_BOTH ? " --index" : "")
+                + " <<'EOF'\n" + patchText + (patchText.endsWith("\n") ? "" : "\n") + "EOF");
+        apply0(patchText, location);
+    }
+
+    private void apply0(String patchText, int location) {
         byte[] b = patchText.getBytes(StandardCharsets.UTF_8);
         PointerByReference dp = new PointerByReference();
         check(git.git_diff_from_buffer(dp, b, new NativeLong(b.length)), "parse patch");
@@ -448,8 +488,27 @@ public class GitRepo implements AutoCloseable {
         if (p != null) apply(p, GIT_APPLY_LOCATION_WORKDIR);
     }
 
+    /**
+     * applies the inverse of the selected rows of a commit's patch to the working directory
+     * (SourceTree's "Reverse hunk"). fails when the file changed there since.
+     */
+    public void reverseLines(LazyPatch patch, BitSet rows) {
+        String p = PartialPatchBuilder.build(patch, rows, true);
+        if (p == null) return;
+        try {
+            apply(p, GIT_APPLY_LOCATION_WORKDIR);
+        } catch (GitException e) {
+            throw new GitException("cannot reverse in " + patch.file().path()
+                    + ": the working copy does not match the commit there (" + e.getMessage() + ")", e.code());
+        }
+    }
+
     /** discards whole working directory changes, untracked files are deleted */
     public void discard(Collection<FileChange> files) {
+        List<String> untracked = files.stream().filter(f -> f.kind() == FileChange.Kind.UNTRACKED).map(FileChange::path).toList();
+        List<String> tracked = files.stream().filter(f -> f.kind() != FileChange.Kind.UNTRACKED).map(FileChange::path).toList();
+        if (!tracked.isEmpty()) cmd("git checkout " + CommandLog.paths(tracked));
+        if (!untracked.isEmpty()) cmd("rm " + CommandLog.paths(untracked));
         for (FileChange f : files) {
             if (f.kind() == FileChange.Kind.UNTRACKED) {
                 try {
@@ -462,7 +521,8 @@ public class GitRepo implements AutoCloseable {
             try (LazyPatch patch = openPatch(new FileChange(f.path(), f.oldPath(), f.kind(), false))) {
                 if (patch == null) continue;
                 if (patch.isBinary()) throw new GitException("cannot discard a binary file: " + f.path());
-                discardLines(patch, PartialPatchBuilder.all(patch));
+                String p = PartialPatchBuilder.build(patch, PartialPatchBuilder.all(patch), true);
+                if (p != null) apply0(p, GIT_APPLY_LOCATION_WORKDIR);
             }
         }
     }
@@ -470,12 +530,13 @@ public class GitRepo implements AutoCloseable {
     // commit
 
     /** repository state */
-    public enum State { NONE, MERGE, REBASE, OTHER }
+    public enum State { NONE, MERGE, REBASE, CHERRY_PICK, OTHER }
 
     public State state() {
         return switch (git.git_repository_state(handle())) {
             case GIT_REPOSITORY_STATE_NONE -> State.NONE;
             case GIT_REPOSITORY_STATE_MERGE -> State.MERGE;
+            case GIT_REPOSITORY_STATE_CHERRYPICK -> State.CHERRY_PICK;
             case GIT_REPOSITORY_STATE_REBASE, GIT_REPOSITORY_STATE_REBASE_INTERACTIVE, GIT_REPOSITORY_STATE_REBASE_MERGE -> State.REBASE;
             default -> State.OTHER;
         };
@@ -529,7 +590,14 @@ public class GitRepo implements AutoCloseable {
      * @return new commit id
      */
     public String commit(String message) {
-        boolean merging = state() == State.MERGE;
+        State state = state();
+        cmd("git commit -m " + CommandLog.message(message), state == State.MERGE ? "a merge commit (MERGE_HEAD is the second parent)" : null);
+        return commit0(message);
+    }
+
+    private String commit0(String message) {
+        State state = state();
+        boolean merging = state == State.MERGE;
         Pointer tree = writeIndexTree();
         Pointer sig = null;
         List<Pointer> parents = new ArrayList<>();
@@ -540,7 +608,7 @@ public class GitRepo implements AutoCloseable {
             GitOid id = new GitOid();
             check(git.git_commit_create(id, handle(), "HEAD", sig, sig, null, message, tree,
                     new NativeLong(parents.size()), parents.isEmpty() ? null : parents.toArray(Pointer[]::new)), "commit");
-            if (merging) git.git_repository_state_cleanup(handle());
+            if (merging || state == State.CHERRY_PICK) git.git_repository_state_cleanup(handle());
             return id.hex();
         } finally {
             parents.forEach(git::git_commit_free);
@@ -551,6 +619,7 @@ public class GitRepo implements AutoCloseable {
 
     /** replaces HEAD with a commit of the index and the message (author is kept), @return new commit id */
     public String amend(String message) {
+        cmd("git commit --amend -m " + CommandLog.message(message));
         if (isHeadUnborn()) throw new GitException("nothing to amend");
         Pointer tree = writeIndexTree();
         Pointer sig = null;
@@ -569,6 +638,11 @@ public class GitRepo implements AutoCloseable {
 
     /** index and working directory to HEAD (git reset --hard HEAD), untracked files are kept */
     public void resetHardToHead() {
+        cmd("git reset --hard HEAD");
+        resetHardToHead0();
+    }
+
+    private void resetHardToHead0() {
         PointerByReference op = new PointerByReference();
         check(git.git_revparse_single(op, handle(), "HEAD"), "HEAD");
         try {
@@ -591,6 +665,7 @@ public class GitRepo implements AutoCloseable {
 
     /** aborts a merge in progress: hard reset to HEAD and cleans up the merge state */
     public void abortMerge() {
+        cmd(state() == State.CHERRY_PICK ? "git cherry-pick --abort" : "git merge --abort");
         PointerByReference op = new PointerByReference();
         check(git.git_revparse_single(op, handle(), "HEAD"), "HEAD");
         try {
@@ -605,15 +680,134 @@ public class GitRepo implements AutoCloseable {
 
     /** checks out a local branch (safe checkout, fails on conflicting local changes) */
     public void checkout(String localBranch) {
+        checkout(localBranch, false);
+    }
+
+    /** @param force discard local changes that conflict */
+    public void checkout(String localBranch, boolean force) {
+        cmd("git checkout " + (force ? "-f " : "") + q(localBranch));
+        checkout0(localBranch, force);
+    }
+
+    private void checkout0(String localBranch, boolean force) {
         String refname = "refs/heads/" + localBranch;
+        checkoutTree(refname, force);
+        check(git.git_repository_set_head(handle(), refname), "set HEAD");
+    }
+
+    /** checks out a commit, HEAD becomes detached */
+    public void checkoutDetached(String commitOid, boolean force) {
+        cmd("git checkout " + (force ? "-f " : "") + "--detach " + q(commitOid));
+        checkoutTree(commitOid, force);
+        GitOid id = new GitOid();
+        check(git.git_oid_fromstr(id, revparse(commitOid)), "oid");
+        check(git.git_repository_set_head_detached(handle(), id), "detach HEAD");
+    }
+
+    private void checkoutTree(String spec, boolean force) {
         PointerByReference op = new PointerByReference();
-        check(git.git_revparse_single(op, handle(), refname), "branch " + localBranch);
+        check(git.git_revparse_single(op, handle(), spec), spec);
         try {
-            check(git.git_checkout_tree(handle(), op.getValue(), LibGit2.safeCheckoutOptions()), "checkout");
+            check(git.git_checkout_tree(handle(), op.getValue(), force ? LibGit2.forceCheckoutOptions() : LibGit2.safeCheckoutOptions()), "checkout");
         } finally {
             git.git_object_free(op.getValue());
         }
-        check(git.git_repository_set_head(handle(), refname), "set HEAD");
+    }
+
+    /** @return local branch names pointing at the commit */
+    public List<String> branchesAt(String commitOid) {
+        return refs().stream().filter(r -> r.kind() == Ref.Kind.LOCAL && commitOid.equals(r.target())).map(Ref::shorthand).toList();
+    }
+
+    // merge / cherry-pick
+
+    public enum MergeResult { UP_TO_DATE, FAST_FORWARD, MERGED, NOT_COMMITTED, CONFLICTS }
+
+    /**
+     * merges a commit into the current branch (SourceTree's "Merge…").
+     *
+     * @param noFastForward create a merge commit even when a fast-forward is possible
+     * @param commit        commit the merge immediately (otherwise it is left merging, like --no-commit)
+     */
+    public MergeResult merge(String commitOid, String message, boolean noFastForward, boolean commit) {
+        cmd("git merge" + (noFastForward ? " --no-ff" : "") + (commit ? "" : " --no-commit") + " -m " + CommandLog.message(message) + " " + q(commitOid));
+        String branch = headBranch();
+        if (branch == null || "HEAD".equals(branch)) throw new GitException("not on a branch");
+        if (state() != State.NONE) throw new GitException("finish or abort the merge in progress first");
+        String target = revparse(commitOid);
+        GitOid t = new GitOid();
+        git.git_oid_fromstr(t, target);
+        PointerByReference ap = new PointerByReference();
+        check(git.git_annotated_commit_lookup(ap, handle(), t), "commit");
+        Pointer[] heads = {ap.getValue()};
+        try {
+            IntByReference analysis = new IntByReference(), preference = new IntByReference();
+            check(git.git_merge_analysis(analysis, preference, handle(), heads, new NativeLong(1)), "merge analysis");
+            int a = analysis.getValue();
+            if ((a & GIT_MERGE_ANALYSIS_UP_TO_DATE) != 0) return MergeResult.UP_TO_DATE;
+            if ((a & GIT_MERGE_ANALYSIS_FASTFORWARD) != 0 && !noFastForward) {
+                fastForward(branch, target, t);
+                return MergeResult.FAST_FORWARD;
+            }
+            Pointer opts = LibGit2.safeCheckoutOptions();
+            opts.setInt(4, GIT_CHECKOUT_SAFE | GIT_CHECKOUT_ALLOW_CONFLICTS);
+            check(git.git_merge(handle(), heads, new NativeLong(1), null, opts), "merge");
+        } finally {
+            git.git_annotated_commit_free(ap.getValue());
+        }
+        if (!conflictedPaths().isEmpty()) return MergeResult.CONFLICTS;
+        if (!commit) return MergeResult.NOT_COMMITTED;
+        commit0(message);
+        return MergeResult.MERGED;
+    }
+
+    public enum CherryPickResult { COMMITTED, NOT_COMMITTED, CONFLICTS }
+
+    /**
+     * applies the changes of a commit on HEAD (not a merge commit).
+     *
+     * @param commit commit immediately with the original message and author,
+     *               otherwise the changes are left staged (commit them to finish)
+     */
+    public CherryPickResult cherryPick(String commitOid, boolean commit) {
+        return cherryPick(commitOid, commit, 0);
+    }
+
+    /**
+     * @param mainline for a merge commit, the parent (1-based) whose side is the base:
+     *                 the changes the merge brought against that parent are applied (git cherry-pick -m)
+     */
+    public CherryPickResult cherryPick(String commitOid, boolean commit, int mainline) {
+        cmd("git cherry-pick" + (mainline > 0 ? " -m " + mainline : "") + (commit ? "" : " --no-commit") + " " + q(commitOid));
+        if (state() != State.NONE) throw new GitException("finish or abort the merge / cherry-pick in progress first");
+        Pointer c = lookupCommit(revparse(commitOid));
+        try {
+            int parents = git.git_commit_parentcount(c);
+            if (parents > 1 && (mainline < 1 || mainline > parents)) {
+                throw new GitException("choose the parent (1.." + parents + ") to cherry-pick a merge commit against");
+            }
+            check(git.git_cherrypick(handle(), c, parents > 1 ? LibGit2.cherrypickOptions(mainline) : null), "cherry-pick");
+            if (!conflictedPaths().isEmpty()) return CherryPickResult.CONFLICTS;
+            if (!commit) return CherryPickResult.NOT_COMMITTED;
+            // keep the original author, like git cherry-pick
+            Pointer tree = writeIndexTree();
+            Pointer sig = null;
+            Pointer head = lookupCommit(revparse("HEAD"));
+            try {
+                sig = signature();
+                GitOid id = new GitOid();
+                check(git.git_commit_create(id, handle(), "HEAD", git.git_commit_author(c), sig, null, git.git_commit_message(c), tree,
+                        new NativeLong(1), new Pointer[] {head}), "commit");
+                git.git_repository_state_cleanup(handle());
+                return CherryPickResult.COMMITTED;
+            } finally {
+                git.git_commit_free(head);
+                if (sig != null) git.git_signature_free(sig);
+                git.git_tree_free(tree);
+            }
+        } finally {
+            git.git_commit_free(c);
+        }
     }
 
     /** a remote */
@@ -643,6 +837,7 @@ public class GitRepo implements AutoCloseable {
     }
 
     public void createRemote(String name, String url) {
+        cmd("git remote add " + q(name) + " " + q(url));
         IntByReference valid = new IntByReference();
         check(git.git_remote_name_is_valid(valid, name), "remote name");
         if (valid.getValue() == 0) throw new GitException("invalid remote name: " + name);
@@ -659,6 +854,9 @@ public class GitRepo implements AutoCloseable {
      */
     public void editRemote(String name, String newName, String url, String pushUrl) {
         String current = name;
+        if (!name.equals(newName)) cmd("git remote rename " + q(name) + " " + q(newName));
+        cmd("git remote set-url " + q(newName) + " " + q(url));
+        if (pushUrl != null && !pushUrl.isBlank()) cmd("git remote set-url --push " + q(newName) + " " + q(pushUrl));
         if (!name.equals(newName)) {
             IntByReference valid = new IntByReference();
             check(git.git_remote_name_is_valid(valid, newName), "remote name");
@@ -679,11 +877,13 @@ public class GitRepo implements AutoCloseable {
 
     /** removes a remote with its remote branches (the repository on the server is not touched) */
     public void removeRemote(String name) {
+        cmd("git remote remove " + q(name));
         check(git.git_remote_delete(handle(), name), "remove remote " + name);
     }
 
     /** renames a local branch, its upstream setting follows */
     public void renameBranch(String name, String newName) {
+        cmd("git branch -m " + q(name) + " " + q(newName));
         IntByReference valid = new IntByReference();
         check(git.git_branch_name_is_valid(valid, newName), "branch name");
         if (valid.getValue() == 0) throw new GitException("invalid branch name: " + newName);
@@ -716,6 +916,7 @@ public class GitRepo implements AutoCloseable {
      * @param force delete even when HEAD does not contain it (its commits may be lost)
      */
     public void deleteBranch(String name, boolean force) {
+        cmd("git branch " + (force ? "-D " : "-d ") + q(name));
         PointerByReference bp = new PointerByReference();
         check(git.git_branch_lookup(bp, handle(), name, GIT_BRANCH_LOCAL), "branch " + name);
         try {
@@ -737,6 +938,11 @@ public class GitRepo implements AutoCloseable {
      *             {@link LibGit2#GIT_RESET_HARD} resets both (local changes are lost)
      */
     public void reset(String commitOid, int type) {
+        cmd("git reset " + (type == GIT_RESET_SOFT ? "--soft" : type == GIT_RESET_HARD ? "--hard" : "--mixed") + " " + q(commitOid));
+        reset0(commitOid, type);
+    }
+
+    private void reset0(String commitOid, int type) {
         PointerByReference op = new PointerByReference();
         check(git.git_revparse_single(op, handle(), commitOid), "commit " + commitOid);
         try {
@@ -748,6 +954,7 @@ public class GitRepo implements AutoCloseable {
 
     /** creates a local branch at the commit, optionally checks it out */
     public void createBranch(String name, String commitOid, boolean checkout) {
+        cmd("git branch " + q(name) + " " + q(commitOid));
         Pointer commit = lookupCommit(commitOid);
         try {
             PointerByReference rp = new PointerByReference();
@@ -762,6 +969,7 @@ public class GitRepo implements AutoCloseable {
     /** creates a local branch tracking the remote branch (e.g. "origin/foo") and checks it out */
     public String checkoutRemote(String remoteBranch) {
         String local = remoteBranch.substring(remoteBranch.indexOf('/') + 1);
+        cmd("git checkout --track -b " + q(local) + " " + q(remoteBranch));
         PointerByReference rp = new PointerByReference();
         if (git.git_branch_lookup(rp, handle(), local, GIT_BRANCH_LOCAL) == 0) {
             git.git_reference_free(rp.getValue());
@@ -778,7 +986,7 @@ public class GitRepo implements AutoCloseable {
                 git.git_commit_free(commit);
             }
         }
-        checkout(local);
+        checkout0(local, false);
         return local;
     }
 
@@ -831,6 +1039,7 @@ public class GitRepo implements AutoCloseable {
         if (branch == null || "HEAD".equals(branch)) throw new GitException("not on a branch");
         String upstream = upstream(branch);
         if (upstream == null) throw new GitException("no upstream for " + branch);
+        cmd((rebase ? "git rebase " : "git merge ") + q(upstream), "pull after the fetch");
         if (state() != State.NONE) throw new GitException("finish or abort the merge in progress first");
         String target = revparse("refs/remotes/" + upstream);
         GitOid t = new GitOid();
@@ -863,7 +1072,7 @@ public class GitRepo implements AutoCloseable {
         } finally {
             git.git_index_free(index);
         }
-        commit("Merge remote-tracking branch '" + upstream + "' into " + branch + "\n");
+        commit0("Merge remote-tracking branch '" + upstream + "' into " + branch + "\n");
         return PullResult.MERGED;
     }
 
@@ -924,6 +1133,7 @@ public class GitRepo implements AutoCloseable {
      * @return true when the rebase finished, false when stopped by conflicts again
      */
     public boolean continueRebase() {
+        cmd("git rebase --continue");
         if (state() != State.REBASE) throw new GitException("no rebase in progress");
         List<String> conflicts = conflictedPaths();
         if (!conflicts.isEmpty()) throw new GitException("resolve and stage first: " + String.join(", ", conflicts));
@@ -934,6 +1144,7 @@ public class GitRepo implements AutoCloseable {
 
     /** throws the rebase in progress away, the branch is back where it was */
     public void abortRebase() {
+        cmd("git rebase --abort");
         PointerByReference rp = new PointerByReference();
         check(git.git_rebase_open(rp, handle(), null), "open rebase");
         try {
@@ -1006,6 +1217,11 @@ public class GitRepo implements AutoCloseable {
      * a hard restore needs a clean working copy.
      */
     public void restore(RefSnapshot s) {
+        StringBuilder sb = new StringBuilder();
+        s.branches().forEach((k, v) -> sb.append(sb.isEmpty() ? "" : "\n").append("git update-ref ").append(q(k)).append(' ').append(v));
+        if (s.head() != null) sb.append("\n").append(s.head().startsWith("refs/") ? "git symbolic-ref HEAD " + q(s.head()) : "git checkout --detach " + s.head());
+        if (s.restore() != Restore.REFS) sb.append("\ngit reset ").append(s.restore() == Restore.ALL ? "--hard" : "--mixed").append(" HEAD");
+        cmd(sb.toString(), "undo / redo of " + s.label());
         if (state() != State.NONE) throw new GitException("finish or abort the merge / rebase in progress first");
         if (!s.soft()) {
             Status st = status();
@@ -1030,9 +1246,9 @@ public class GitRepo implements AutoCloseable {
             }
         }
         switch (s.restore()) {
-            case ALL -> resetHardToHead();
+            case ALL -> resetHardToHead0();
             case INDEX -> {
-                if (!isHeadUnborn()) reset(revparse("HEAD"), GIT_RESET_MIXED);
+                if (!isHeadUnborn()) reset0(revparse("HEAD"), GIT_RESET_MIXED);
             }
             case REFS -> {}
         }
@@ -1045,6 +1261,7 @@ public class GitRepo implements AutoCloseable {
 
     /** resolves a conflicted file with our (HEAD) or their version, a missing side deletes the file */
     public void resolveConflict(String path, boolean ours) {
+        cmd("git checkout " + (ours ? "--ours" : "--theirs") + " -- " + q(path) + " && git add -- " + q(path));
         Pointer index = index();
         try {
             PointerByReference a = new PointerByReference(), o = new PointerByReference(), t = new PointerByReference();
@@ -1126,6 +1343,8 @@ public class GitRepo implements AutoCloseable {
 
     /** stashes the working copy changes, @return false when there was nothing to stash */
     public boolean stashSave(String message, boolean keepIndex, boolean includeUntracked) {
+        cmd("git stash push" + (keepIndex ? " --keep-index" : "") + (includeUntracked ? " --include-untracked" : "")
+                + (message == null || message.isBlank() ? "" : " -m " + CommandLog.message(message)));
         Pointer sig = signature();
         try {
             int flags = (keepIndex ? GIT_STASH_KEEP_INDEX : 0) | (includeUntracked ? GIT_STASH_INCLUDE_UNTRACKED : 0);
@@ -1139,14 +1358,17 @@ public class GitRepo implements AutoCloseable {
     }
 
     public void stashApply(int index) {
+        cmd("git stash apply stash@{" + index + "}");
         check(git.git_stash_apply(handle(), new NativeLong(index), null), "stash apply");
     }
 
     public void stashPop(int index) {
+        cmd("git stash pop stash@{" + index + "}");
         check(git.git_stash_pop(handle(), new NativeLong(index), null), "stash pop");
     }
 
     public void stashDrop(int index) {
+        cmd("git stash drop stash@{" + index + "}");
         check(git.git_stash_drop(handle(), new NativeLong(index)), "stash drop");
     }
 
@@ -1164,6 +1386,7 @@ public class GitRepo implements AutoCloseable {
 
     /** removes files from the index but keeps them in the working directory (git rm --cached) */
     public void stopTracking(Collection<FileChange> files) {
+        cmd("git rm --cached -q " + CommandLog.paths(pathsOf(files)));
         Pointer index = index();
         try {
             for (FileChange f : files) check(git.git_index_remove_bypath(index, f.path()), "remove " + f.path());
@@ -1209,6 +1432,7 @@ public class GitRepo implements AutoCloseable {
     /** appends the pattern to the ignore file of the target (creating it), @return the file */
     public Path ignore(String pattern, IgnoreTarget target) {
         Path file = ignoreFile(target);
+        cmd("echo " + q(pattern) + " >> " + q(file.toString()));
         try {
             Files.createDirectories(file.getParent());
             String current = Files.exists(file) ? Files.readString(file) : "";

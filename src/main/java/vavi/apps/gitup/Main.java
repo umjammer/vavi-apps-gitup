@@ -75,6 +75,7 @@ public class Main implements MainWindow.App {
             FlatMacLightLaf.setup();
         }
         UIManager.put("Table.showHorizontalLines", false);
+        hideFocusIndicators();
 
         if (GitUpKitLocator.find() == null && !chooseFramework()) {
             System.exit(1);
@@ -178,6 +179,22 @@ public class Main implements MainWindow.App {
             if (w.isVisible() && (w instanceof MainWindow || w instanceof RepositoryBrowser)) return;
         }
         System.exit(0);
+    }
+
+    /**
+     * no blue focus box around lists, trees, tables (their scroll panes) and cells.
+     * the macOS themes draw a 2px focus ring and a focused border color.
+     */
+    static void hideFocusIndicators() {
+        UIManager.put("Component.focusWidth", 0);
+        UIManager.put("Component.innerFocusWidth", 0);
+        UIManager.put("Component.focusedBorderColor", UIManager.getColor("Component.borderColor"));
+        UIManager.put("Table.focusCellHighlightBorder", UIManager.getBorder("Table.cellNoFocusBorder"));
+        UIManager.put("Table.focusSelectedCellHighlightBorder", UIManager.getBorder("Table.cellNoFocusBorder"));
+        UIManager.put("List.focusCellHighlightBorder", UIManager.getBorder("List.cellNoFocusBorder"));
+        UIManager.put("List.focusSelectedCellHighlightBorder", UIManager.getBorder("List.cellNoFocusBorder"));
+        UIManager.put("Tree.showCellFocusIndicator", false);
+        UIManager.put("SplitPaneDivider.focusable", false);
     }
 
     /** asks for GitUp.app when it is not at a default location */

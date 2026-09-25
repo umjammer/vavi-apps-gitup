@@ -11,6 +11,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.BitSet;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
@@ -423,6 +424,144 @@ class GitRepoFeaturesTest {
             repo.restore(s);
             assertTrue(repo.refs().stream().anyMatch(r -> r.shorthand().equals("topic")));
         }
+    }
+
+    @Test
+    void checkoutCommitAndForce() throws Exception {
+        Path b = setupClone();
+        commitInB(b, 2, "two");
+        String first = sh(b, "rev-parse", "HEAD~1").strip();
+        try (GitRepo repo = new GitRepo(b)) {
+            assertEquals(List.of("main"), repo.branchesAt(repo.headOid()));
+            repo.checkoutDetached(first, false);
+            assertTrue(repo.isHeadDetached());
+            assertEquals(first, repo.headOid());
+            assertEquals("1\n2\n3\n4\n5\n", Files.readString(b.resolve("f.txt")));
+
+            Files.writeString(b.resolve("f.txt"), "local change\n");
+            assertThrows(GitException.class, () -> repo.checkout("main", false), "a conflicting local change stops a safe checkout");
+            repo.checkout("main", true);
+            assertEquals("main", repo.headBranch());
+        }
+        assertEquals("", sh(b, "status", "--porcelain"), "force discarded the change");
+    }
+
+    @Test
+    void mergeOptions() throws Exception {
+        Path b = setupClone();
+        sh(b, "checkout", "-q", "-b", "topic");
+        commitInB(b, 1, "ONE");
+        String topic = sh(b, "rev-parse", "HEAD").strip();
+        sh(b, "checkout", "-q", "main");
+        try (GitRepo repo = new GitRepo(b)) {
+            // fast-forward possible, but a merge commit is asked for
+            assertEquals(GitRepo.MergeResult.MERGED, repo.merge(topic, "Merge topic\n", true, true));
+            assertEquals(3, sh(b, "log", "-1", "--format=%P %H").strip().split(" ").length);
+            assertEquals("Merge topic", sh(b, "log", "-1", "--format=%s").strip());
+            assertEquals(GitRepo.MergeResult.UP_TO_DATE, repo.merge(topic, "x\n", false, true));
+        }
+        // diverged, not committed: left merging
+        sh(b, "checkout", "-q", "topic");
+        commitInB(b, 2, "TWO");
+        String topic2 = sh(b, "rev-parse", "HEAD").strip();
+        sh(b, "checkout", "-q", "main");
+        commitInB(b, 5, "FIVE");
+        try (GitRepo repo = new GitRepo(b)) {
+            assertEquals(GitRepo.MergeResult.NOT_COMMITTED, repo.merge(topic2, "x\n", false, false));
+            assertEquals(GitRepo.State.MERGE, repo.state());
+            repo.commit("merged later\n");
+            assertEquals(GitRepo.State.NONE, repo.state());
+        }
+        assertEquals("ONE\nTWO\n3\n4\nFIVE\n", Files.readString(b.resolve("f.txt")));
+    }
+
+    @Test
+    void cherryPick() throws Exception {
+        Path b = setupClone();
+        sh(b, "checkout", "-q", "-b", "topic");
+        Files.writeString(b.resolve("g.txt"), "g\n");
+        sh(b, "add", "g.txt");
+        sh(b, "-c", "user.name=someone", "-c", "user.email=someone@example.com", "commit", "-q", "-m", "add g");
+        String g = sh(b, "rev-parse", "HEAD").strip();
+        commitInB(b, 3, "CONFLICT-A");
+        String conflicting = sh(b, "rev-parse", "HEAD").strip();
+        sh(b, "checkout", "-q", "main");
+        commitInB(b, 3, "CONFLICT-B");
+        try (GitRepo repo = new GitRepo(b)) {
+            assertEquals(GitRepo.CherryPickResult.COMMITTED, repo.cherryPick(g, true));
+            assertEquals("add g", sh(b, "log", "-1", "--format=%s").strip());
+            assertEquals("someone", sh(b, "log", "-1", "--format=%an").strip(), "the original author is kept");
+            assertEquals(GitRepo.State.NONE, repo.state());
+
+            assertEquals(GitRepo.CherryPickResult.CONFLICTS, repo.cherryPick(conflicting, true));
+            assertEquals(GitRepo.State.CHERRY_PICK, repo.state());
+            repo.abortMerge();
+            assertEquals(GitRepo.State.NONE, repo.state());
+            assertEquals("", sh(b, "status", "--porcelain"));
+        }
+    }
+
+    /** SourceTree's "Reverse hunk" / reverse lines of a commit in the log */
+    @Test
+    void reverseCommitHunkAndLines() throws Exception {
+        Path b = setupClone();
+        List<String> lines = new ArrayList<>(Files.readAllLines(b.resolve("f.txt")));
+        lines.set(0, "ONE");
+        lines.set(4, "FIVE");
+        lines.add("six");
+        Files.writeString(b.resolve("f.txt"), String.join("\n", lines) + "\n");
+        sh(b, "commit", "-q", "-am", "change");
+        Files.writeString(b.resolve("g.txt"), "g\n"); // a later commit elsewhere, the reverse still applies
+        sh(b, "add", "g.txt");
+        sh(b, "commit", "-q", "-m", "later");
+        try (GitRepo repo = new GitRepo(b)) {
+            String change = repo.revparse("HEAD~1");
+            FileChange f = repo.commitFiles(change).getFirst();
+            try (LazyPatch p = repo.openPatch(change, f)) {
+                // the whole patch: lines 1 and 5 changed, six added (one or two hunks)
+                BitSet all = PartialPatchBuilder.all(p);
+                // reverse only the "+six" line first
+                BitSet six = new BitSet();
+                for (int r = 0; r < p.rowCount(); r++) if (p.row(r).content().equals("six\n")) six.set(r);
+                repo.reverseLines(p, six);
+                assertEquals("ONE\n2\n3\n4\nFIVE\n", Files.readString(b.resolve("f.txt")));
+            }
+            // back to the commit's state, then reverse the whole patch (every hunk)
+            sh(b, "checkout", "--", "f.txt");
+            try (LazyPatch p = repo.openPatch(change, f)) {
+                repo.reverseLines(p, PartialPatchBuilder.all(p));
+            }
+            assertEquals("1\n2\n3\n4\n5\n", Files.readString(b.resolve("f.txt")));
+            // the reversed state no longer matches the commit: a second reverse does not apply
+            try (LazyPatch p = repo.openPatch(change, f)) {
+                GitException e = assertThrows(GitException.class, () -> repo.reverseLines(p, PartialPatchBuilder.all(p)));
+                assertTrue(e.getMessage().startsWith("cannot reverse in f.txt"), e.getMessage());
+            }
+        }
+        assertEquals(" M f.txt\n", sh(b, "status", "--porcelain"), "the working copy only, the index is untouched");
+    }
+
+    /** a merge commit against its first parent brings what the merged branch changed (git cherry-pick -m 1) */
+    @Test
+    void cherryPickMergeCommit() throws Exception {
+        Path b = setupClone();
+        sh(b, "checkout", "-q", "-b", "feature");
+        Files.writeString(b.resolve("g.txt"), "g\n");
+        sh(b, "add", "g.txt");
+        sh(b, "commit", "-q", "-m", "feature work");
+        sh(b, "checkout", "-q", "main");
+        sh(b, "checkout", "-q", "-b", "integration");
+        sh(b, "merge", "-q", "--no-ff", "-m", "merge feature", "feature");
+        String merge = sh(b, "rev-parse", "HEAD").strip();
+        sh(b, "checkout", "-q", "main");
+        try (GitRepo repo = new GitRepo(b)) {
+            assertThrows(GitException.class, () -> repo.cherryPick(merge, true), "a merge needs the parent");
+            assertEquals(GitRepo.CherryPickResult.COMMITTED, repo.cherryPick(merge, true, 1));
+        }
+        assertEquals("g\n", Files.readString(b.resolve("g.txt")));
+        assertEquals("merge feature", sh(b, "log", "-1", "--format=%s").strip());
+        assertEquals(1, sh(b, "log", "-1", "--format=%P").strip().split(" ").length, "a normal commit, not a merge");
+        assertEquals("", sh(b, "status", "--porcelain"));
     }
 
     @Test

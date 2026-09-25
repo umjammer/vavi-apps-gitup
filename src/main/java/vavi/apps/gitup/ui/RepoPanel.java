@@ -145,12 +145,17 @@ public class RepoPanel extends JPanel {
         watchTimer.setRepeats(false);
         buildUi();
 
-        exec.submit(() -> repo = new GitRepo(path), r -> {
+        exec.submit(() -> {
+            repo = new GitRepo(path);
+            repo.setCommandLog(commandLog);
+            return repo;
+        }, r -> {
             workdir = r.workdir();
             staging.stagedTable.setWorkdir(workdir);
             staging.unstagedTable.setWorkdir(workdir);
             staging.commitTable.setWorkdir(workdir);
             host.titleChanged(this);
+            loadUndo();
             startWatcher(r.gitDir());
             refreshAll(true);
         }, e -> {
@@ -233,6 +238,9 @@ public class RepoPanel extends JPanel {
             @Override public void editMessage(CommitRow commit) { RepoPanel.this.editMessage(commit); }
             @Override public void rewrite(CommitRow commit, LogPanel.Rewrite rewrite) { RepoPanel.this.rewrite(commit, rewrite); }
             @Override public void resetTo(CommitRow commit) { RepoPanel.this.resetTo(commit); }
+            @Override public void checkoutCommit(CommitRow commit) { RepoPanel.this.checkoutCommit(commit); }
+            @Override public void mergeCommit(CommitRow commit) { RepoPanel.this.mergeCommit(commit); }
+            @Override public void cherryPick(CommitRow commit) { RepoPanel.this.cherryPick(commit); }
         });
         sidebar.setListener(new SidebarPanel.Listener() {
             @Override public void checkout(Ref ref) { RepoPanel.this.checkout(ref); }
@@ -329,6 +337,8 @@ public class RepoPanel extends JPanel {
             KeyStroke.getKeyStroke(KeyEvent.VK_Z, menuMask), this::undo);
     private final Action redoAction = action("Redo", "Redo the last undone operation",
             KeyStroke.getKeyStroke(KeyEvent.VK_Z, menuMask | shift), this::redo);
+    private final Action historyAction = action("Command History", "The git commands equivalent to what was done",
+            KeyStroke.getKeyStroke(KeyEvent.VK_H, menuMask | shift), this::showCommandHistory);
     private final Action findAction = action("Find…", "Search the history", KeyStroke.getKeyStroke(KeyEvent.VK_F, menuMask), () -> {
         searchField.requestFocusInWindow();
         searchField.selectAll();
@@ -337,7 +347,7 @@ public class RepoPanel extends JPanel {
 
     /** actions for the window's "Repository" menu, null is a separator */
     public List<Action> repositoryActions() {
-        return java.util.Arrays.asList(undoAction, redoAction, null, refreshAction, findAction, null, commitAction, branchAction, stashAction, discardAction, abortMergeAction,
+        return java.util.Arrays.asList(undoAction, redoAction, null, refreshAction, findAction, historyAction, null, commitAction, branchAction, stashAction, discardAction, abortMergeAction,
                 null, fetchAction, pullAction, pullRebaseAction, pushAction);
     }
 
@@ -509,10 +519,11 @@ public class RepoPanel extends JPanel {
         }
         if (state != repoState) {
             repoState = state;
-            merging = state == GitRepo.State.MERGE;
+            merging = state == GitRepo.State.MERGE || state == GitRepo.State.CHERRY_PICK;
             staging.setState(state);
-            abortMergeAction.setEnabled(state == GitRepo.State.MERGE || state == GitRepo.State.REBASE);
-            abortMergeAction.putValue(Action.NAME, state == GitRepo.State.REBASE ? "Abort Rebase" : "Abort Merge");
+            abortMergeAction.setEnabled(state == GitRepo.State.MERGE || state == GitRepo.State.REBASE || state == GitRepo.State.CHERRY_PICK);
+            abortMergeAction.putValue(Action.NAME, state == GitRepo.State.REBASE ? "Abort Rebase"
+                    : state == GitRepo.State.CHERRY_PICK ? "Abort Cherry-pick" : "Abort Merge");
             if (merging && staging.message.getText().isBlank()) {
                 exec.submit(() -> repo.mergeMessage(), m -> {
                     if (m != null && staging.message.getText().isBlank()) {
@@ -654,11 +665,17 @@ public class RepoPanel extends JPanel {
                 "Discard the selected changes in " + patch.file().path() + "?\nThis cannot be undone.", "Discard")) {
             return;
         }
+        if (action == DiffView.Action.REVERSE && !confirm(
+                "Reverse the selected changes of this commit in " + patch.file().path() + "?\n"
+                        + "The inverse is applied to the working copy, review and commit it.", "Reverse")) {
+            return;
+        }
         exec.run(() -> {
             switch (action) {
                 case STAGE -> repo.stageLines(patch, rows);
                 case UNSTAGE -> repo.unstageLines(patch, rows);
                 case DISCARD -> repo.discardLines(patch, rows);
+                case REVERSE -> repo.reverseLines(patch, rows);
             }
         }, this::refreshStatus);
     }
@@ -754,7 +771,8 @@ public class RepoPanel extends JPanel {
             exec.run(() -> repo.abortRebase(), () -> refreshAll(true));
             return;
         }
-        if (!merging || !confirm("Abort the merge?\nAll changes of the merge, including resolved conflicts, are lost.", "Abort Merge")) return;
+        String what = repoState == GitRepo.State.CHERRY_PICK ? "cherry-pick" : "merge";
+        if (!merging || !confirm("Abort the " + what + "?\nAll its changes, including resolved conflicts, are lost.", "Abort")) return;
         exec.run(() -> repo.abortMerge(), () -> {
             staging.message.setText("");
             refreshAll(true);
@@ -821,7 +839,31 @@ public class RepoPanel extends JPanel {
         updateUndo();
     }
 
+    /** the undo / redo history kept over restarts */
+    private vavi.apps.gitup.model.UndoStore undoStore;
+
+    private void loadUndo() {
+        try {
+            undoStore = new vavi.apps.gitup.model.UndoStore(vavi.apps.gitup.model.UndoStore.defaultDir(), workdir);
+            vavi.apps.gitup.model.UndoStore.History h = undoStore.load();
+            undoStack.clear();
+            undoStack.addAll(h.undo());
+            redoStack.clear();
+            redoStack.addAll(h.redo());
+            updateUndo();
+        } catch (RuntimeException e) {
+            logger.log(System.Logger.Level.WARNING, "undo history: " + e.getMessage(), e);
+        }
+    }
+
     private void updateUndo() {
+        if (undoStore != null) {
+            try {
+                undoStore.save(new ArrayList<>(undoStack), new ArrayList<>(redoStack));
+            } catch (RuntimeException e) {
+                logger.log(System.Logger.Level.WARNING, "undo history: " + e.getMessage(), e);
+            }
+        }
         GitRepo.RefSnapshot s = undoStack.peekLast();
         undoAction.setEnabled(s != null);
         undoAction.putValue(Action.NAME, s != null ? "Undo " + s.label() : "Undo");
@@ -862,6 +904,20 @@ public class RepoPanel extends JPanel {
             statusBar.setText("Undid " + s.label());
             refreshAll(true);
         });
+    }
+
+    // command history
+
+    /** the equivalent git commands of what was done in this tab */
+    private final vavi.apps.gitup.model.CommandLog commandLog = new vavi.apps.gitup.model.CommandLog();
+    private CommandHistory commandHistory;
+
+    private void showCommandHistory() {
+        if (commandHistory == null || !commandHistory.isDisplayable()) {
+            commandHistory = new CommandHistory(this, getRepositoryName(), commandLog);
+        }
+        commandHistory.setVisible(true);
+        commandHistory.toFront();
     }
 
     // search
@@ -966,6 +1022,8 @@ public class RepoPanel extends JPanel {
             if (message.isEmpty() || message.equals(c.message().strip())) return;
             exec.submit(() -> {
                 GitRepo.RefSnapshot snapshot = repo.snapshotRefs("Edit Message", false);
+                commandLog.add("git rebase -i " + c.oid() + "^  # reword " + c.shortOid() + " -m " + vavi.apps.gitup.model.CommandLog.message(message),
+                        "GitUpKit GCHistory rewrite: the descendants are replayed with their trees");
                 String oid = HistoryOps.editMessage(workdir, c.oid(), message + "\n");
                 pushUndo(snapshot);
                 return oid;
@@ -1037,6 +1095,14 @@ public class RepoPanel extends JPanel {
                     case MOVE_DOWN -> "Move Down";
                     case DELETE -> "Delete Commit";
                 }, false);
+                String base = r == LogPanel.Rewrite.MOVE_DOWN || r == LogPanel.Rewrite.SQUASH || r == LogPanel.Rewrite.FIXUP ? c.oid() + "^^" : c.oid() + "^";
+                commandLog.add("git rebase -i " + base + "  # " + switch (r) {
+                    case SQUASH -> "squash " + c.shortOid() + " into its parent";
+                    case FIXUP -> "fixup " + c.shortOid() + " into its parent";
+                    case MOVE_UP -> "move " + c.shortOid() + " after its child";
+                    case MOVE_DOWN -> "move " + c.shortOid() + " before its parent";
+                    case DELETE -> "drop " + c.shortOid();
+                }, "GitUpKit GCHistory rewrite");
                 String result = switch (r) {
                     case SQUASH -> HistoryOps.squashWithParent(workdir, c.oid(), message + "\n");
                     case FIXUP -> HistoryOps.fixupWithParent(workdir, c.oid());
@@ -1200,6 +1266,122 @@ public class RepoPanel extends JPanel {
         });
     }
 
+    /** SourceTree's "Checkout…" of a commit: a branch pointing at it, or the commit itself (detached HEAD) */
+    private void checkoutCommit(CommitRow c) {
+        exec.submit(() -> repo.branchesAt(c.oid()), branches -> {
+            javax.swing.ButtonGroup g = new javax.swing.ButtonGroup();
+            JPanel p = new JPanel(new GridLayout(0, 1));
+            p.add(new JLabel("Checkout " + c.shortOid() + " \"" + c.summary() + "\""));
+            List<javax.swing.JRadioButton> branchButtons = new ArrayList<>();
+            for (String b : branches) {
+                javax.swing.JRadioButton r = new javax.swing.JRadioButton("the branch " + b, branchButtons.isEmpty());
+                r.setActionCommand(b);
+                g.add(r);
+                p.add(r);
+                branchButtons.add(r);
+            }
+            javax.swing.JRadioButton detached = new javax.swing.JRadioButton("the commit (detached HEAD)", branchButtons.isEmpty());
+            g.add(detached);
+            p.add(detached);
+            JLabel note = new JLabel("<html><font color='gray'>on a detached HEAD new commits belong to no branch, create one to keep them</font></html>");
+            p.add(note);
+            JCheckBox clean = new JCheckBox("Clean (discard all local changes)");
+            p.add(clean);
+            if (JOptionPane.showConfirmDialog(this, p, "Checkout", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) return;
+            if (clean.isSelected() && logPanel.hasUncommitted()
+                    && !confirm("Discard all uncommitted changes of the working copy?\nThey cannot be recovered.", "Checkout")) return;
+            String branch = branchButtons.stream().filter(javax.swing.AbstractButton::isSelected).map(javax.swing.AbstractButton::getActionCommand).findFirst().orElse(null);
+            boolean force = clean.isSelected();
+            exec.run(() -> {
+                if (branch != null) repo.checkout(branch, force);
+                else repo.checkoutDetached(c.oid(), force);
+            }, () -> {
+                statusBar.setText("Checked out " + (branch != null ? branch : c.shortOid() + " (detached HEAD)"));
+                refreshAll(true);
+            });
+        });
+    }
+
+    /** SourceTree's "Merge…": the commit (or the branch at it) into the current branch */
+    private void mergeCommit(CommitRow c) {
+        if (headBranch == null || "HEAD".equals(headBranch)) {
+            showError(new IllegalStateException("check out a branch to merge into first"));
+            return;
+        }
+        String into = headBranch;
+        exec.submit(() -> repo.refs().stream().filter(r -> c.oid().equals(r.target()) && r.kind() != Ref.Kind.TAG)
+                .map(Ref::shorthand).filter(n -> !n.equals(into)).findFirst().orElse(null), name -> {
+            String what = name != null ? (name.contains("/") ? "remote-tracking branch '" + name + "'" : "branch '" + name + "'") : "commit '" + c.shortOid() + "'";
+            JTextField message = new JTextField("Merge " + what + " into " + into, 40);
+            JCheckBox commit = new JCheckBox("Commit merged changes immediately", true);
+            JCheckBox noFF = new JCheckBox("Create a new commit even if fast-forward is possible");
+            JPanel p = new JPanel(new GridLayout(0, 1));
+            p.add(new JLabel("Merge " + (name != null ? name : c.shortOid() + " \"" + c.summary() + "\"") + " into " + into));
+            p.add(new JLabel("Message:"));
+            p.add(message);
+            p.add(commit);
+            p.add(noFF);
+            if (JOptionPane.showConfirmDialog(this, p, "Merge", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) return;
+            String msg = message.getText().strip();
+            boolean now = commit.isSelected(), ff = noFF.isSelected();
+            exec.submit(() -> {
+                GitRepo.RefSnapshot snapshot = repo.snapshotRefs("Merge", GitRepo.Restore.ALL);
+                GitRepo.MergeResult r = repo.merge(c.oid(), msg + "\n", ff, now);
+                if (r == GitRepo.MergeResult.MERGED || r == GitRepo.MergeResult.FAST_FORWARD) pushUndo(snapshot);
+                return r;
+            }, r -> {
+                switch (r) {
+                    case UP_TO_DATE -> statusBar.setText("Already up to date");
+                    case FAST_FORWARD -> statusBar.setText("Fast-forwarded " + into);
+                    case MERGED -> statusBar.setText("Merged into " + into);
+                    case NOT_COMMITTED -> statusBar.setText("Merged, not committed: review and commit");
+                    case CONFLICTS -> JOptionPane.showMessageDialog(this, "The merge has conflicts.\nResolve them, stage the files and commit, or abort the merge.",
+                            "Merge", JOptionPane.WARNING_MESSAGE);
+                }
+                if (r == GitRepo.MergeResult.NOT_COMMITTED) staging.message.setText(msg);
+                refreshAll(true);
+            });
+        });
+    }
+
+    /** SourceTree's "Cherry Pick": the changes of the commit on HEAD */
+    private void cherryPick(CommitRow c) {
+        exec.submit(() -> c.parents().stream().map(repo::commitRow).toList(), parents -> cherryPick(c, parents));
+    }
+
+    /** @param parents for a merge commit, the parent to pick against is asked (git cherry-pick -m) */
+    private void cherryPick(CommitRow c, List<CommitRow> parents) {
+        JCheckBox commit = new JCheckBox("Commit immediately", true);
+        JPanel p = new JPanel(new GridLayout(0, 1));
+        p.add(new JLabel("Cherry-pick " + c.shortOid() + " \"" + c.summary() + "\" onto " + (headBranch != null ? headBranch : "HEAD") + "?"));
+        javax.swing.JComboBox<String> mainline = new javax.swing.JComboBox<>();
+        if (parents.size() > 1) {
+            p.add(new JLabel("A merge commit: apply its changes against the parent"));
+            for (int i = 0; i < parents.size(); i++) {
+                mainline.addItem((i + 1) + ": " + parents.get(i).shortOid() + " " + parents.get(i).summary());
+            }
+            p.add(mainline);
+        }
+        p.add(commit);
+        if (JOptionPane.showConfirmDialog(this, p, "Cherry-pick", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) return;
+        boolean now = commit.isSelected();
+        int parent = parents.size() > 1 ? mainline.getSelectedIndex() + 1 : 0;
+        exec.submit(() -> {
+            GitRepo.RefSnapshot snapshot = repo.snapshotRefs("Cherry-pick", GitRepo.Restore.ALL);
+            GitRepo.CherryPickResult r = repo.cherryPick(c.oid(), now, parent);
+            if (r == GitRepo.CherryPickResult.COMMITTED) pushUndo(snapshot);
+            return r;
+        }, r -> {
+            switch (r) {
+                case COMMITTED -> statusBar.setText("Cherry-picked " + c.shortOid());
+                case NOT_COMMITTED -> statusBar.setText("Cherry-picked " + c.shortOid() + ", not committed: review and commit");
+                case CONFLICTS -> JOptionPane.showMessageDialog(this, "The cherry-pick has conflicts.\nResolve them, stage the files and commit, or abort the cherry-pick.",
+                        "Cherry-pick", JOptionPane.WARNING_MESSAGE);
+            }
+            refreshAll(true);
+        });
+    }
+
     /** SourceTree's "Reset current branch to this commit": soft, mixed or hard */
     private void resetTo(CommitRow c) {
         String branch = headBranch != null ? headBranch : "HEAD";
@@ -1291,6 +1473,7 @@ public class RepoPanel extends JPanel {
         exec.submit(() -> {
             if (remote == null) {
                 remote = new RemoteOps(repo.workdir(), prompter, s -> SwingUtilities.invokeLater(() -> statusBar.setText(label + ": " + s)));
+                remote.setCommandLog(commandLog);
             }
             return op.apply(remote);
         }, message -> {
