@@ -87,7 +87,7 @@ public class RepositoryBrowser extends JFrame {
         tree.setRootVisible(false);
         tree.setShowsRootHandles(true);
         tree.setRowHeight(0); // variable, repositories show two lines
-        tree.setCellRenderer(new Renderer());
+        tree.setCellRenderer(new Renderer(status));
         ToolTipManager.sharedInstance().registerComponent(tree);
         tree.addTreeExpansionListener(new javax.swing.event.TreeExpansionListener() {
             @Override public void treeExpanded(javax.swing.event.TreeExpansionEvent e) { expansionChanged(e.getPath(), true); }
@@ -152,6 +152,69 @@ public class RepositoryBrowser extends JFrame {
         getContentPane().add(bar, BorderLayout.SOUTH);
         WindowState.remember(this, "browser", new Dimension(380, 560));
         rebuild();
+        addWindowListener(new java.awt.event.WindowAdapter() {
+            @Override public void windowActivated(java.awt.event.WindowEvent e) {
+                if (System.currentTimeMillis() - statusTime > STATUS_INTERVAL) refreshStatus();
+            }
+        });
+    }
+
+    // ahead / behind
+
+    /** repository → ahead / behind against the upstream (empty: none), missing until computed */
+    private final java.util.Map<Path, java.util.Optional<vavi.apps.gitup.model.GitRepo.AheadBehind>> status = new java.util.concurrent.ConcurrentHashMap<>();
+    /** recomputed when the window is activated after this (ms) */
+    private static final long STATUS_INTERVAL = 30_000;
+    private volatile long statusTime;
+    private final java.util.concurrent.ExecutorService statusExecutor = java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "browser status");
+        t.setDaemon(true);
+        return t;
+    });
+
+    /** recomputes ahead / behind of every bookmarked repository (as of their last fetch), in the background */
+    public void refreshStatus() {
+        statusTime = System.currentTimeMillis();
+        refreshStatus(false);
+    }
+
+    /** @param missingOnly only the repositories not computed yet (added) */
+    private void refreshStatus(boolean missingOnly) {
+        List<Path> repos = new ArrayList<>();
+        collectRepos(bookmarks.root(), repos);
+        if (missingOnly) repos.removeIf(status::containsKey);
+        if (repos.isEmpty()) return;
+        statusExecutor.execute(() -> {
+            for (Path p : repos) {
+                java.util.Optional<vavi.apps.gitup.model.GitRepo.AheadBehind> ab = aheadBehind(p);
+                if (!ab.equals(status.put(p, ab))) javax.swing.SwingUtilities.invokeLater(() -> repoChanged(p));
+            }
+        });
+    }
+
+    private static java.util.Optional<vavi.apps.gitup.model.GitRepo.AheadBehind> aheadBehind(Path p) {
+        if (!Files.isDirectory(p.resolve(".git"))) return java.util.Optional.empty();
+        try (vavi.apps.gitup.model.GitRepo repo = new vavi.apps.gitup.model.GitRepo(p)) {
+            return java.util.Optional.ofNullable(repo.aheadBehind());
+        } catch (RuntimeException e) {
+            return java.util.Optional.empty();
+        }
+    }
+
+    private static void collectRepos(Group g, List<Path> repos) {
+        for (Entry e : g.children()) {
+            if (e instanceof Repo r) repos.add(r.path());
+            else if (e instanceof Group c) collectRepos(c, repos);
+        }
+    }
+
+    /** the row of the repository changes its width */
+    private void repoChanged(Path p) {
+        java.util.Enumeration<javax.swing.tree.TreeNode> e = rootNode.depthFirstEnumeration();
+        while (e.hasMoreElements()) {
+            DefaultMutableTreeNode n = (DefaultMutableTreeNode) e.nextElement();
+            if (n.getUserObject() instanceof Repo r && r.path().equals(p)) model.nodeChanged(n);
+        }
     }
 
     /** reflects the bookmarks (after an outside change, e.g. a repository opened from the menu) */
@@ -180,6 +243,7 @@ public class RepositoryBrowser extends JFrame {
         } finally {
             rebuilding = false;
         }
+        refreshStatus(true);
     }
 
     /**
@@ -277,6 +341,12 @@ public class RepositoryBrowser extends JFrame {
         menu.add(group);
         menu.addSeparator();
         menu.add(importSt);
+        menu.addSeparator();
+        JMenuItem refresh = new JMenuItem("Refresh Status");
+        refresh.setToolTipText("ahead / behind of each repository against its upstream (as of the last fetch)");
+        refresh.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_R, Keys.menu()));
+        refresh.addActionListener(e -> refreshStatus());
+        menu.add(refresh);
         menu.addSeparator();
         JMenuItem settings = new JMenuItem("Settings…");
         settings.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_COMMA, Keys.menu()));
@@ -427,6 +497,12 @@ public class RepositoryBrowser extends JFrame {
     }
 
     private static class Renderer extends DefaultTreeCellRenderer {
+        private final java.util.Map<Path, java.util.Optional<vavi.apps.gitup.model.GitRepo.AheadBehind>> status;
+
+        Renderer(java.util.Map<Path, java.util.Optional<vavi.apps.gitup.model.GitRepo.AheadBehind>> status) {
+            this.status = status;
+        }
+
         @Override
         public Component getTreeCellRendererComponent(JTree t, Object v, boolean sel, boolean exp, boolean leaf, int row, boolean focus) {
             super.getTreeCellRendererComponent(t, v, sel, exp, leaf, row, focus);
@@ -437,9 +513,15 @@ public class RepositoryBrowser extends JFrame {
                 setIcon(IconProvider.get().icon(IconProvider.Key.REPOSITORY, 16));
                 boolean exists = Files.isDirectory(r.path());
                 String branch = exists ? branchOf(r.path()) : null;
-                setText("<html><b>" + esc(r.name()) + "</b>" + (branch != null ? " <font color='#0969da'>" + esc(branch) + "</font>" : "")
+                vavi.apps.gitup.model.GitRepo.AheadBehind ab = status.getOrDefault(r.path(), java.util.Optional.empty()).orElse(null);
+                if (ab != null && !ab.branch().equals(branch)) ab = null; // checked out another branch since
+                String counts = ab == null ? ""
+                        : (ab.ahead() > 0 ? "&nbsp;&nbsp;<font color='#1a7f37'><b>↑</b>&nbsp;" + ab.ahead() + "</font>" : "")
+                        + (ab.behind() > 0 ? "&nbsp;&nbsp;<font color='#bc4c00'><b>↓</b>&nbsp;" + ab.behind() + "</font>" : "");
+                setText("<html><b>" + esc(r.name()) + "</b>" + (branch != null ? " <font color='#0969da'>" + esc(branch) + "</font>" : "") + counts
                         + "<br><font color='gray' size='-2'>" + esc(r.path().toString()) + (exists ? "" : " (missing)") + "</font></html>");
-                setToolTipText(r.path().toString());
+                setToolTipText(ab == null ? r.path().toString() : "<html>" + esc(r.path().toString()) + "<br>" + esc(ab.branch()) + ": "
+                        + ab.ahead() + " ahead, " + ab.behind() + " behind " + esc(ab.upstream()) + " (as of the last fetch)</html>");
             } else if (o instanceof Group g) {
                 setIcon(IconProvider.get().icon(IconProvider.Key.FOLDER, 16));
                 setText(g.name());

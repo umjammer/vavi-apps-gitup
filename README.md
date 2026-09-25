@@ -14,7 +14,9 @@ SourceTree-like git GUI (Swing) using [GitUp](https://gitup.co)'s `GitUpKit.fram
  * one window, a tab per repository (the tabs are restored at the next start, repositories given on the command line are added)
  * window size / position, split panes and log columns, the repository browser (shown or not, size, position) are remembered
  * repository browser (⌘B): bookmarks in nested groups, search, drag to regroup, drop folders from the Finder,
-   import SourceTree's bookmarks (Repository Browser menu), expanded / collapsed groups are remembered
+   import SourceTree's bookmarks (Repository Browser menu), expanded / collapsed groups are remembered,
+   ahead ↑ / behind ↓ counts of the current branch against its upstream (as of the last fetch, recomputed when the window
+   is activated or with ⌘R)
  * search (⌘F) the whole history: commit messages, file names and changed lines, a result jumps to the commit, file and line
  * icons: SourceTree's, read at runtime from an installed SourceTree.app (not distributed), or the built-in ones
    (`-Dgitup.icons=builtin|sourcetree`, `-Dgitup.sourcetree=/path/to/Sourcetree.app`)
@@ -49,7 +51,8 @@ SourceTree-like git GUI (Swing) using [GitUp](https://gitup.co)'s `GitUpKit.fram
    * accounts: service, host, username, protocol; passwords / tokens in the macOS Keychain (shared with git's osxkeychain helper),
      used when a fetch / push asks for credentials; import from `~/.m2/settings.xml` servers (checkbox per server,
      service / host guessed from the id, token headers of GitLab style servers too, encrypted passwords are skipped)
-   * diff: colors (added / removed lines background and text like SourceTree, hunk header / selection), lines of context,
+   * diff: colors (added / removed lines background and text like SourceTree, hunk header / selection),
+     font (SourceTree's Menlo 12 by default, family / size), lines of context,
      external diff and merge tools (FileMerge, VS Code, Kaleidoscope, Beyond Compare, Meld, P4Merge or a custom command)
  * file menu: external diff, external merge tool for a conflicted file
  * command history (⇧⌘H): the git commands equivalent to what was done (libgit2 / GitUpKit calls, GitUp's rewrites as

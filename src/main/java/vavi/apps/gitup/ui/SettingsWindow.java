@@ -375,6 +375,94 @@ public class SettingsWindow extends JFrame {
         return north;
     }
 
+    /** the font of the diff view: family (fixed width ones by default), size, preview */
+    private JComponent fontPanel() {
+        JPanel p = new JPanel(new GridBagLayout());
+        p.setBorder(BorderFactory.createTitledBorder("Font"));
+        GridBagConstraints c = new GridBagConstraints();
+        c.insets = new Insets(3, 6, 3, 6);
+        c.anchor = GridBagConstraints.WEST;
+
+        String[] all = java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment().getAvailableFontFamilyNames();
+        javax.swing.JComboBox<String> family = new javax.swing.JComboBox<>();
+        javax.swing.JCheckBox fixedOnly = new javax.swing.JCheckBox("Fixed width only", true);
+        JSpinner size = new JSpinner(new SpinnerNumberModel(12, 6, 72, 1));
+        JLabel preview = new JLabel();
+        JLabel status = new JLabel();
+        boolean[] adjusting = {false};
+
+        Runnable update = () -> {
+            adjusting[0] = true;
+            try {
+                java.awt.Font f = DiffView.settingsFont();
+                String current = f.getFamily().equals(java.awt.Font.MONOSPACED) ? f.getName() : f.getFamily();
+                family.removeAllItems();
+                for (String name : all) {
+                    if (!fixedOnly.isSelected() || name.equals(current) || isFixedWidth(name)) family.addItem(name);
+                }
+                if (((javax.swing.DefaultComboBoxModel<String>) family.getModel()).getIndexOf(current) < 0) family.addItem(current);
+                family.setSelectedItem(current);
+                size.setValue(f.getSize());
+                preview.setFont(f);
+                preview.setText("+ added line   - removed line   0Oo1lI {}");
+                status.setText(settings.diffFontName() == null && settings.diffFontSize() == 0 ? "default (SourceTree's)" : "");
+            } finally {
+                adjusting[0] = false;
+            }
+        };
+        Runnable store = () -> {
+            if (adjusting[0]) return;
+            String name = (String) family.getSelectedItem();
+            int sz = (Integer) size.getValue();
+            settings.setDiffFont(name == null || name.equals(DiffView.defaultFontName()) ? null : name, sz == DiffView.DEFAULT_FONT_SIZE ? 0 : sz);
+            update.run();
+        };
+        family.addActionListener(e -> store.run());
+        size.addChangeListener(e -> store.run());
+        fixedOnly.addActionListener(e -> update.run());
+        JButton reset = new JButton("Default");
+        reset.addActionListener(e -> {
+            settings.setDiffFont(null, 0);
+            update.run();
+        });
+        update.run();
+
+        c.gridy = 0;
+        c.gridx = 0;
+        p.add(new JLabel("Family:"), c);
+        c.gridx = 1;
+        p.add(family, c);
+        c.gridx = 2;
+        p.add(fixedOnly, c);
+        c.gridy = 1;
+        c.gridx = 0;
+        p.add(new JLabel("Size:"), c);
+        c.gridx = 1;
+        p.add(size, c);
+        c.gridx = 2;
+        p.add(reset, c);
+        c.gridx = 3;
+        c.weightx = 1;
+        p.add(status, c);
+        c.weightx = 0;
+        c.gridy = 2;
+        c.gridx = 0;
+        c.gridwidth = 4;
+        p.add(preview, c);
+        return p;
+    }
+
+    /** fixed width fonts: 'i' as wide as 'm' */
+    private boolean isFixedWidth(String family) {
+        return fixedWidth.computeIfAbsent(family, n -> {
+            java.awt.Font f = new java.awt.Font(n, java.awt.Font.PLAIN, 12);
+            java.awt.FontMetrics fm = getFontMetrics(f);
+            return f.canDisplay('m') && fm.charWidth('m') > 0 && fm.charWidth('i') == fm.charWidth('m');
+        });
+    }
+
+    private final java.util.Map<String, Boolean> fixedWidth = new java.util.HashMap<>();
+
     private JComponent diffTab() {
         JPanel colors = new JPanel(new GridBagLayout());
         colors.setBorder(BorderFactory.createTitledBorder("Colors"));
@@ -447,7 +535,7 @@ public class SettingsWindow extends JFrame {
         JPanel p = new JPanel();
         p.setLayout(new javax.swing.BoxLayout(p, javax.swing.BoxLayout.Y_AXIS));
         p.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
-        for (JComponent x : new JComponent[] {colors, general, tools}) {
+        for (JComponent x : new JComponent[] {colors, fontPanel(), general, tools}) {
             x.setAlignmentX(Component.LEFT_ALIGNMENT);
             p.add(x);
         }

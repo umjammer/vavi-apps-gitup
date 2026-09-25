@@ -179,6 +179,8 @@ public interface LibGit2 extends Library {
     int git_repository_set_head_detached(Pointer repo, GitOid commitish);
 
     int git_graph_descendant_of(Pointer repo, GitOid commit, GitOid ancestor);
+    /** ahead, behind are size_t* */
+    int git_graph_ahead_behind(NativeLongByReference ahead, NativeLongByReference behind, Pointer repo, GitOid local, GitOid upstream);
 
     // objects
 

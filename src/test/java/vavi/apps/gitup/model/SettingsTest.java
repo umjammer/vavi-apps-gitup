@@ -80,7 +80,15 @@ class SettingsTest {
         assertTrue(s.protectPushed(), "on by default");
         s.setProtectPushed(false);
         assertFalse(new Settings(prefs).protectPushed());
-        assertEquals(7, changes[0]);
+        assertNull(s.diffFontName());
+        assertEquals(0, s.diffFontSize());
+        s.setDiffFont("Courier", 14);
+        assertEquals("Courier", new Settings(prefs).diffFontName());
+        assertEquals(14, new Settings(prefs).diffFontSize());
+        s.setDiffFont(null, 0);
+        assertNull(s.diffFontName());
+        assertEquals(0, s.diffFontSize());
+        assertEquals(9, changes[0]);
     }
 
     @Test

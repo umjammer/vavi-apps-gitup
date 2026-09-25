@@ -88,7 +88,7 @@ public class DiffView extends JComponent implements Scrollable {
     private final List<HeaderButton> buttons = new ArrayList<>();
 
     public DiffView() {
-        setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+        applyFontSetting();
         setOpaque(true);
         setFocusable(true);
         MouseAdapter mouse = new MouseAdapter() {
@@ -204,6 +204,33 @@ public class DiffView extends JComponent implements Scrollable {
     }
 
     // painting
+
+    /** SourceTree's diff font: Menlo, Monaco before macOS 10.6 */
+    private static final List<String> DEFAULT_FONTS = List.of("Menlo", "Monaco");
+    public static final int DEFAULT_FONT_SIZE = 12;
+
+    /** @return the first installed of SourceTree's fonts, or the logical monospaced font */
+    public static String defaultFontName() {
+        List<String> installed = List.of(java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment().getAvailableFontFamilyNames());
+        return DEFAULT_FONTS.stream().filter(installed::contains).findFirst().orElse(Font.MONOSPACED);
+    }
+
+    /** the font from the settings, or the default */
+    public static Font settingsFont() {
+        Settings s = Settings.get();
+        String name = s.diffFontName() != null ? s.diffFontName() : defaultFontName();
+        int size = s.diffFontSize() > 0 ? s.diffFontSize() : DEFAULT_FONT_SIZE;
+        return new Font(name, Font.PLAIN, size);
+    }
+
+    /** (re)applies the font of the settings */
+    public void applyFontSetting() {
+        Font f = settingsFont();
+        if (f.equals(getFont())) return;
+        setFont(f);
+        revalidate();
+        repaint();
+    }
 
     /** the color from the settings, or the theme's default */
     private static Color color(Settings.DiffColor key) {

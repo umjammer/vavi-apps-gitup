@@ -187,6 +187,7 @@ public class RepoPanel extends JPanel {
 
     /** diff colors repaint, the context lines reopen the shown diff */
     private final Runnable settingsListener = () -> SwingUtilities.invokeLater(() -> {
+        diff.applyFontSetting();
         diff.repaint();
         int n = vavi.apps.gitup.model.Settings.get().contextLines();
         if (repo == null && workdir == null) return;

@@ -148,6 +148,30 @@ public class GitRepo implements AutoCloseable {
         }
     }
 
+    /** commits of the current branch not in its upstream (ahead) and of the upstream not in the branch (behind) */
+    public record AheadBehind(String branch, String upstream, int ahead, int behind) {}
+
+    /** @return against the upstream of the current branch (as of the last fetch), null when detached, unborn or without upstream */
+    public AheadBehind aheadBehind() {
+        String branch = headBranch();
+        if (branch == null || "HEAD".equals(branch)) return null;
+        String upstream = upstream(branch);
+        if (upstream == null) return null;
+        PointerByReference op = new PointerByReference();
+        if (git.git_revparse_single(op, handle(), "refs/remotes/" + upstream) != 0) return null; // upstream gone
+        GitOid remote = new GitOid(); // own memory, the object's id is freed with it
+        try {
+            remote.id = new GitOid(git.git_object_id(op.getValue())).id.clone();
+        } finally {
+            git.git_object_free(op.getValue());
+        }
+        GitOid local = new GitOid();
+        git.git_oid_fromstr(local, revparse("HEAD"));
+        com.sun.jna.ptr.NativeLongByReference a = new com.sun.jna.ptr.NativeLongByReference(), b = new com.sun.jna.ptr.NativeLongByReference();
+        check(git.git_graph_ahead_behind(a, b, handle(), local, remote), "ahead behind");
+        return new AheadBehind(branch, upstream, a.getValue().intValue(), b.getValue().intValue());
+    }
+
     /** @return the commit id HEAD points to, null when unborn */
     public String headOid() {
         return isHeadUnborn() ? null : revparse("HEAD");

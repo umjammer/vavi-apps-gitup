@@ -262,6 +262,30 @@ class GitRepoFeaturesTest {
         }
     }
 
+    /** the repository browser's counts */
+    @Test
+    void aheadBehind() throws Exception {
+        Path b = setupClone();
+        try (GitRepo repo = new GitRepo(b)) {
+            assertEquals(new GitRepo.AheadBehind("main", "origin/main", 0, 0), repo.aheadBehind());
+        }
+        commitInB(b, 2, "two");
+        commitInB(b, 3, "three");
+        pushFromA(5, "five");
+        sh(b, "fetch", "-q");
+        try (GitRepo repo = new GitRepo(b)) {
+            assertEquals(new GitRepo.AheadBehind("main", "origin/main", 2, 1), repo.aheadBehind());
+        }
+        sh(b, "checkout", "-q", "-b", "local");
+        try (GitRepo repo = new GitRepo(b)) {
+            assertNull(repo.aheadBehind(), "no upstream");
+        }
+        sh(b, "checkout", "-q", "--detach");
+        try (GitRepo repo = new GitRepo(b)) {
+            assertNull(repo.aheadBehind(), "detached");
+        }
+    }
+
     /** protect pushed commits: where a commit is pushed, which branch moves drop pushed commits */
     @Test
     void pushedCommits() throws Exception {

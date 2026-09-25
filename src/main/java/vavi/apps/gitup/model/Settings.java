@@ -121,6 +121,25 @@ public final class Settings {
         return id.equals(ExternalTool.CUSTOM) ? blankToNull(customMergeCommand()) : ExternalTool.preset(id).merge();
     }
 
+    /** the font family of the diff view, null means the default (SourceTree's Menlo) */
+    public String diffFontName() {
+        return blankToNull(prefs.get("diff.font.name", null));
+    }
+
+    /** the font size of the diff view, 0 means the default */
+    public int diffFontSize() {
+        return prefs.getInt("diff.font.size", 0);
+    }
+
+    /** @param name null for the default, @param size 0 for the default */
+    public void setDiffFont(String name, int size) {
+        if (name == null) prefs.remove("diff.font.name");
+        else prefs.put("diff.font.name", name);
+        if (size <= 0) prefs.remove("diff.font.size");
+        else prefs.putInt("diff.font.size", size);
+        changed();
+    }
+
     /** true (default): amend, history rewrites, reset and undo of commits already pushed ask for an explicit override */
     public boolean protectPushed() {
         return prefs.getBoolean("history.protectPushed", true);

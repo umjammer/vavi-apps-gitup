@@ -102,4 +102,12 @@ class DiffViewTest {
         g.dispose();
         return image;
     }
+
+    @Test
+    void defaultFont() {
+        String name = DiffView.defaultFontName();
+        List<String> installed = List.of(java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment().getAvailableFontFamilyNames());
+        if (installed.contains("Menlo")) org.junit.jupiter.api.Assertions.assertEquals("Menlo", name, "SourceTree's");
+        else org.junit.jupiter.api.Assertions.assertEquals(installed.contains("Monaco") ? "Monaco" : java.awt.Font.MONOSPACED, name);
+    }
 }
