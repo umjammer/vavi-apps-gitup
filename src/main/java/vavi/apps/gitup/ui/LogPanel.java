@@ -65,6 +65,8 @@ public class LogPanel extends JPanel {
         void selectedMany(List<CommitRow> commits);
         /** GitUp's "Edit Message": rewrites the commit and its descendants */
         void editMessage(CommitRow commit);
+        /** rewrites the author of the commit, descendants are rewritten with their trees */
+        void editAuthor(CommitRow commit);
         /** GitUp's other history rewrites */
         void rewrite(CommitRow commit, Rewrite rewrite);
         /** SourceTree's "Reset current branch to this commit" */
@@ -247,6 +249,7 @@ public class LogPanel extends JPanel {
             menu.addSeparator();
             // GitUp's history rewriting
             item(menu, "Edit Message…", () -> { if (listener != null) listener.editMessage(c); });
+            item(menu, "Edit Author…", () -> { if (listener != null) listener.editAuthor(c); });
             rewriteItem(menu, "Squash Into Parent…", c, Rewrite.SQUASH, single);
             rewriteItem(menu, "Fixup Into Parent", c, Rewrite.FIXUP, single);
             rewriteItem(menu, "Move Up (Swap with Child)", c, Rewrite.MOVE_UP, single);

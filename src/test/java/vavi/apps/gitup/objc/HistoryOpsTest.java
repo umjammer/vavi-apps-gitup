@@ -18,11 +18,14 @@ import org.junit.jupiter.api.condition.EnabledIf;
 import org.junit.jupiter.api.io.TempDir;
 
 import vavi.apps.gitup.jna.GitUpKitLocator;
+import vavi.apps.gitup.model.GitException;
+import vavi.apps.gitup.model.GitRepo;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 
 /**
@@ -144,5 +147,94 @@ class HistoryOpsTest {
         assertEquals(newTwo, sh("rev-parse", "topic"), "other local branches containing the commit move too");
         assertEquals("main", sh("rev-parse", "--abbrev-ref", "HEAD"));
         assertEquals("?? wip.txt", sh("status", "--porcelain"));
+    }
+
+    /** a, b, c each rewriting f.txt: deleting b conflicts when c is replayed onto a */
+    void conflictingCommits() throws Exception {
+        sh("init", "-q", "-b", "main");
+        sh("config", "user.name", "t");
+        sh("config", "user.email", "t@example.com");
+        for (String n : List.of("a", "b", "c")) {
+            Files.writeString(dir.resolve("f.txt"), n + "\n");
+            sh("add", ".");
+            sh("commit", "-q", "-m", n, "--author", "author " + n + " <" + n + "@example.com>");
+        }
+    }
+
+    @Test
+    void conflictResolved() throws Exception {
+        conflictingCommits();
+        String a = sh("rev-parse", "HEAD~2");
+        String c = sh("rev-parse", "HEAD");
+        List<String> calls = new ArrayList<>();
+        HistoryOps.delete(dir, sh("rev-parse", "HEAD~1"), (ours, theirs, message) -> {
+            try {
+                calls.add(ours + " " + theirs + " " + message.strip());
+                assertEquals("HEAD", sh("rev-parse", "--abbrev-ref", "HEAD"), "detached");
+                assertEquals(ours, sh("rev-parse", "HEAD"));
+                assertTrue(Files.readString(dir.resolve("f.txt")).contains("<<<<<<<"), "conflict markers");
+                assertEquals("UU f.txt", sh("status", "--porcelain"));
+                Files.writeString(dir.resolve("f.txt"), "a and c\n");
+                sh("add", "f.txt");
+                return true;
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+        });
+        assertEquals(List.of(a + " " + c + " c"), calls);
+        assertEquals("c\na", sh("log", "--format=%s", "main"));
+        assertEquals("author c", sh("log", "-1", "--format=%an", "main"), "the author is kept");
+        assertEquals("main", sh("rev-parse", "--abbrev-ref", "HEAD"));
+        assertEquals("a and c\n", sh("show", "main:f.txt") + "\n");
+        // HEAD's tree changed, the working copy is still the old one: the app resets after the rewrite
+        try (GitRepo repo = new GitRepo(dir)) {
+            repo.resetHardToHead();
+        }
+        assertEquals("", sh("status", "--porcelain"));
+        assertEquals("a and c\n", Files.readString(dir.resolve("f.txt")));
+    }
+
+    @Test
+    void conflictAborted() throws Exception {
+        conflictingCommits();
+        String before = sh("rev-parse", "HEAD");
+        GitException e = assertThrows(GitException.class,
+                () -> HistoryOps.delete(dir, sh("rev-parse", "HEAD~1"), (ours, theirs, message) -> false));
+        assertTrue(e.getMessage().contains("aborted"), e.getMessage());
+        assertEquals(before, sh("rev-parse", "HEAD"));
+        assertEquals("main", sh("rev-parse", "--abbrev-ref", "HEAD"));
+        assertEquals("", sh("status", "--porcelain"));
+        assertEquals("c\n", Files.readString(dir.resolve("f.txt")));
+    }
+
+    @Test
+    void conflictNotResolved() throws Exception {
+        conflictingCommits();
+        String before = sh("rev-parse", "HEAD");
+        assertThrows(GitException.class, () -> HistoryOps.delete(dir, sh("rev-parse", "HEAD~1"), (ours, theirs, message) -> true));
+        assertEquals(before, sh("rev-parse", "HEAD"));
+        assertEquals("", sh("status", "--porcelain"));
+    }
+
+    @Test
+    void editAuthor() throws Exception {
+        conflictingCommits();
+        sh("branch", "topic", "HEAD~1");
+        String b = sh("rev-parse", "HEAD~1");
+        String treesBefore = sh("log", "--format=%T", "main");
+        String dateBefore = sh("log", "-1", "--format=%ad", b);
+        try (GitRepo repo = new GitRepo(dir)) {
+            String copy = repo.copyWithAuthor(b, "New Name", "new@example.com");
+            assertEquals(b, sh("rev-parse", "main~1"), "no reference moved yet");
+            String newB = HistoryOps.rewriteWith(dir, b, copy);
+            assertEquals(copy, newB);
+        }
+        assertEquals("author c\nNew Name\nauthor a", sh("log", "--format=%an", "main"));
+        assertEquals("new@example.com", sh("log", "-1", "--format=%ae", "main~1"));
+        assertEquals(dateBefore, sh("log", "-1", "--format=%ad", "main~1"), "the author date is kept");
+        assertEquals("b", sh("log", "-1", "--format=%B", "main~1"));
+        assertEquals(treesBefore, sh("log", "--format=%T", "main"));
+        assertEquals(sh("rev-parse", "main~1"), sh("rev-parse", "topic"));
+        assertEquals("", sh("status", "--porcelain"));
     }
 }

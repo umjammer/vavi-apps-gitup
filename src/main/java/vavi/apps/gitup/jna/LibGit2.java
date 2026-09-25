@@ -388,5 +388,7 @@ public interface LibGit2 extends Library {
     // signature
 
     int git_signature_default(PointerByReference out, Pointer repo);
+    /** @param offset timezone offset in minutes */
+    int git_signature_new(PointerByReference out, String name, String email, long time, int offset);
     void git_signature_free(Pointer sig);
 }

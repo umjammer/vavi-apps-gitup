@@ -267,6 +267,8 @@ public class GitRepo implements AutoCloseable {
     private Pointer index() {
         PointerByReference ip = new PointerByReference();
         check(git.git_repository_index(ip, handle()), "index");
+        // GitUpKit may have written the index file (history rewrite conflicts), reload it when it changed
+        check(git.git_index_read(ip.getValue(), 0), "read index");
         return ip.getValue();
     }
 
@@ -1372,6 +1374,30 @@ public class GitRepo implements AutoCloseable {
             if (git.git_graph_descendant_of(handle(), t, c) == 1) return true;
         }
         return false;
+    }
+
+    /**
+     * creates a copy of the commit with another author (the author date is kept), no reference is moved.
+     * the copy replaces the commit with {@code HistoryOps.rewriteWith}.
+     *
+     * @return the id of the copy
+     */
+    public String copyWithAuthor(String oid, String name, String email) {
+        Pointer c = lookupCommit(oid);
+        PointerByReference ap = new PointerByReference();
+        Pointer committer = null;
+        try {
+            vavi.apps.gitup.jna.Structs.GitSignature old = new vavi.apps.gitup.jna.Structs.GitSignature(git.git_commit_author(c));
+            check(git.git_signature_new(ap, name, email, old.when.time, old.when.offset), "author");
+            committer = signature();
+            GitOid id = new GitOid();
+            check(git.git_commit_amend(id, c, null, ap.getValue(), committer, null, null, null), "copy commit");
+            return id.hex();
+        } finally {
+            if (ap.getValue() != null) git.git_signature_free(ap.getValue());
+            if (committer != null) git.git_signature_free(committer);
+            git.git_commit_free(c);
+        }
     }
 
     /** reads one commit (without graph lanes) */

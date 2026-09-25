@@ -27,7 +27,9 @@ SourceTree-like git GUI (Swing) using [GitUp](https://gitup.co)'s `GitUpKit.fram
  * log columns: graph, description, commit, author (with email), date; select several commits to see the changes of the range
  * undo (⌘Z) / redo (⇧⌘Z) of commit, amend, pull, reset, branch deletion and history rewrites
    (branches and HEAD go back; a commit's changes come back staged), kept over restarts
- * GitUp's history rewriting in the log: edit message, squash / fixup into parent, move up / down, delete commit
+ * GitUp's history rewriting in the log: edit message, edit author, squash / fixup into parent, move up / down, delete commit
+ * conflicts while moving / deleting a commit are resolved like GitUp: the conflicted files are checked out
+   (HEAD detached), use mine / theirs, external merge tool or edit and mark resolved, then continue (the author is kept) or abort (nothing changes)
  * branches / remotes / tags / stashes sidebar, checkout, new branch, stash / apply / pop / delete, show a stash's changes
  * branches: rename, delete (SourceTree-like dialog: several at once, force regardless of merge status, the remote branches too),
    delete a branch on the server
@@ -74,8 +76,10 @@ without a repository the last session's tabs are restored, or the repository bro
  * `git_checkout_tree` with `NULL` options is a dry run, the app always passes `GIT_CHECKOUT_SAFE`
  * live refresh uses FSEvents directly, not `GCLiveRepository`, which loads the whole history when created
  * "Edit Message" uses GitUp's `GCHistory` rewriting, the history is loaded only for that operation
- * GitUp's rewrites run without its conflict resolver UI: a rewrite that would conflict fails and changes nothing,
-   GitUp does not swap with a root commit
+ * GitUp's conflict resolver is replaced by the app's dialog (a GitUpKit conflict handler block through rococoa),
+   while it is shown the git thread keeps running the dialog's tasks. GitUp does not swap with a root commit
+ * "Edit Author" makes a copy of the commit with libgit2 (`git_commit_amend`, the author date is kept),
+   then GitUp's `GCHistory` rewrite replaces the commit with it
  * github credential needs "contents" and "workflow" both "rw" 
 
 ## References
@@ -84,6 +88,3 @@ without a repository the last session's tabs are restored, or the repository bro
  * https://libgit2.org/libgit2/#v1.4.4
 
 ## TODO
-
- * conflict resolution while rewriting history (GitUp's resolver)
- * log part: add "edit author" if possible

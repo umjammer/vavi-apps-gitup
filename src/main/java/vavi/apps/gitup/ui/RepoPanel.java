@@ -256,6 +256,7 @@ public class RepoPanel extends JPanel {
             @Override public void createBranch(CommitRow commit) { newBranch(commit.oid()); }
             @Override public void selectedMany(List<CommitRow> commits) { commitsSelected(commits); }
             @Override public void editMessage(CommitRow commit) { RepoPanel.this.editMessage(commit); }
+            @Override public void editAuthor(CommitRow commit) { RepoPanel.this.editAuthor(commit); }
             @Override public void rewrite(CommitRow commit, LogPanel.Rewrite rewrite) { RepoPanel.this.rewrite(commit, rewrite); }
             @Override public void resetTo(CommitRow commit) { RepoPanel.this.resetTo(commit); }
             @Override public void checkoutCommit(CommitRow commit) { RepoPanel.this.checkoutCommit(commit); }
@@ -990,6 +991,11 @@ public class RepoPanel extends JPanel {
 
     /** opens the external merge tool on a conflicted file, then offers to mark it resolved */
     private void externalMerge(FileChange f) {
+        externalMerge(f, this::refreshStatus);
+    }
+
+    /** @param after runs (on the EDT) when done */
+    private void externalMerge(FileChange f, Runnable after) {
         String command = vavi.apps.gitup.model.Settings.get().mergeCommand();
         if (command == null) {
             showError(new IllegalStateException("choose an external merge tool in Settings (⌘,)"));
@@ -1005,9 +1011,9 @@ public class RepoPanel extends JPanel {
                     "MERGED", workdir.resolve(f.path()).toString());
         }, env -> runTool("External Merge", command, env, () -> {
             if (confirm("Did the merge of " + f.path() + " finish?\nStage it to mark the conflict resolved.", "External Merge")) {
-                exec.run(() -> repo.stage(List.of(new FileChange(f.path(), f.path(), FileChange.Kind.MODIFIED, false))), this::refreshStatus);
+                exec.run(() -> repo.stage(List.of(new FileChange(f.path(), f.path(), FileChange.Kind.MODIFIED, false))), after);
             } else {
-                refreshStatus();
+                after.run();
             }
         }));
     }
@@ -1164,6 +1170,153 @@ public class RepoPanel extends JPanel {
         });
     }
 
+    /** replaces the author of a commit, the commit and its descendants are rewritten with the same trees */
+    private void editAuthor(CommitRow c) {
+        exec.submit(() -> Map.entry(repo.isPublished(c.oid()), repo.state()), info -> {
+            if (info.getValue() != GitRepo.State.NONE) {
+                showError(new IllegalStateException("finish or abort the merge in progress first"));
+                return;
+            }
+            JTextField name = new JTextField(c.author(), 30);
+            JTextField email = new JTextField(c.email(), 30);
+            JPanel fields = new JPanel(new GridLayout(0, 2, 6, 4));
+            fields.add(new JLabel("Name:"));
+            fields.add(name);
+            fields.add(new JLabel("Email:"));
+            fields.add(email);
+            JPanel p = new JPanel(new BorderLayout(0, 6));
+            p.add(new JLabel("New author of " + c.shortOid() + " \"" + c.summary() + "\":"), BorderLayout.NORTH);
+            p.add(fields, BorderLayout.CENTER);
+            if (info.getKey()) {
+                JLabel warn = new JLabel("<html><font color='#bc4c00'>This commit is on a remote branch already.<br>"
+                        + "Rewriting it changes published history, others will need to reconcile.</font></html>");
+                p.add(warn, BorderLayout.SOUTH);
+            }
+            if (JOptionPane.showConfirmDialog(this, p, "Edit Author", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) return;
+            String n = name.getText().strip(), m = email.getText().strip();
+            if (n.isEmpty() || m.isEmpty() || (n.equals(c.author()) && m.equals(c.email()))) return;
+            exec.submit(() -> {
+                GitRepo.RefSnapshot snapshot = repo.snapshotRefs("Edit Author", false);
+                commandLog.add("git rebase -i " + c.oid() + "^  # edit " + c.shortOid() + ", then: git commit --amend --no-edit --author="
+                        + vavi.apps.gitup.model.CommandLog.message(n + " <" + m + ">") + " && git rebase --continue",
+                        "GitUpKit GCHistory rewrite: the descendants are replayed with their trees");
+                String copy = repo.copyWithAuthor(c.oid(), n, m);
+                String oid = HistoryOps.rewriteWith(workdir, c.oid(), copy);
+                pushUndo(snapshot);
+                return oid;
+            }, newOid -> {
+                statusBar.setText("Rewrote the author of " + c.shortOid() + " as " + newOid.substring(0, 7));
+                selectedCommit = newOid;
+                showingWorking = false;
+                refreshAll(true);
+            });
+        });
+    }
+
+    /**
+     * GitUp's conflict resolver for a replay of a history rewrite, called on the git thread. the working directory
+     * has the conflicted files (HEAD detached), the dialog's tasks run on the git thread while it waits.
+     *
+     * @return true when resolved (staged), false to abort the rewrite
+     */
+    private boolean resolveRewriteConflicts(String ours, String theirs, String message) {
+        java.util.concurrent.CompletableFuture<Boolean> done = new java.util.concurrent.CompletableFuture<>();
+        CommitRow their = repo.commitRow(theirs);
+        SwingUtilities.invokeLater(() -> showRewriteConflicts(ours, their, done));
+        return exec.await(done);
+    }
+
+    private void showRewriteConflicts(String ours, CommitRow their, java.util.concurrent.CompletableFuture<Boolean> done) {
+        javax.swing.JDialog dialog = new javax.swing.JDialog(SwingUtilities.getWindowAncestor(this), "Resolve Conflicts",
+                java.awt.Dialog.ModalityType.DOCUMENT_MODAL);
+        javax.swing.DefaultListModel<String> model = new javax.swing.DefaultListModel<>();
+        javax.swing.JList<String> list = new javax.swing.JList<>(model);
+        JButton mine = new JButton("Use Mine");
+        JButton theirs = new JButton("Use Theirs");
+        JButton merge = new JButton("External Merge…");
+        JButton open = new JButton("Open");
+        JButton resolved = new JButton("Mark Resolved");
+        JButton abort = new JButton("Abort Rewrite");
+        JButton cont = new JButton("Continue");
+        cont.setEnabled(false);
+
+        Runnable reload = () -> exec.submit(repo::conflictedPaths, paths -> {
+            List<String> selection = list.getSelectedValuesList();
+            model.clear();
+            paths.forEach(model::addElement);
+            for (String x : selection) {
+                int i = model.indexOf(x);
+                if (i >= 0) list.addSelectionInterval(i, i);
+            }
+            if (list.isSelectionEmpty() && !model.isEmpty()) list.setSelectedIndex(0);
+            cont.setEnabled(model.isEmpty());
+        });
+        Runnable finish = () -> {
+            dialog.dispose();
+            done.complete(false);
+        };
+        java.util.function.Consumer<Boolean> side = ours0 -> {
+            List<String> paths = list.getSelectedValuesList();
+            if (!paths.isEmpty()) exec.run(() -> paths.forEach(x -> repo.resolveConflict(x, ours0)), reload);
+        };
+        mine.addActionListener(e -> side.accept(true));
+        theirs.addActionListener(e -> side.accept(false));
+        merge.addActionListener(e -> {
+            String x = list.getSelectedValue();
+            if (x != null) externalMerge(new FileChange(x, x, FileChange.Kind.CONFLICTED, false), reload);
+        });
+        open.addActionListener(e -> {
+            for (String x : list.getSelectedValuesList()) {
+                try {
+                    Desktop.getDesktop().open(workdir.resolve(x).toFile());
+                } catch (Exception ex) {
+                    showError(ex);
+                }
+            }
+        });
+        resolved.addActionListener(e -> {
+            List<FileChange> files = list.getSelectedValuesList().stream()
+                    .map(x -> new FileChange(x, x, Files.exists(workdir.resolve(x)) ? FileChange.Kind.MODIFIED : FileChange.Kind.DELETED, false))
+                    .toList();
+            if (!files.isEmpty()) exec.run(() -> repo.stage(files), reload);
+        });
+        abort.addActionListener(e -> finish.run());
+        cont.addActionListener(e -> {
+            dialog.dispose();
+            done.complete(true);
+        });
+        dialog.setDefaultCloseOperation(javax.swing.WindowConstants.DO_NOTHING_ON_CLOSE);
+        dialog.addWindowListener(new java.awt.event.WindowAdapter() {
+            @Override public void windowClosing(java.awt.event.WindowEvent e) { finish.run(); }
+        });
+
+        JPanel p = new JPanel(new BorderLayout(0, 8));
+        p.setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
+        p.add(new JLabel("<html>Replaying " + their.shortOid() + " \"" + escape(their.summary()) + "\" onto " + ours.substring(0, 7)
+                + " conflicts.<br>Resolve the files (edit them and mark resolved, or use a side), then continue.<br>"
+                + "Mine: " + ours.substring(0, 7) + ", theirs: " + their.shortOid() + ". Aborting changes nothing.</html>"), BorderLayout.NORTH);
+        p.add(new JScrollPane(list), BorderLayout.CENTER);
+        JPanel side0 = new JPanel(new GridLayout(0, 1, 0, 4));
+        for (JButton b : List.of(mine, theirs, merge, open, resolved)) side0.add(b);
+        JPanel east = new JPanel(new BorderLayout());
+        east.add(side0, BorderLayout.NORTH);
+        p.add(east, BorderLayout.EAST);
+        JPanel south = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, 6, 0));
+        south.add(abort);
+        south.add(cont);
+        p.add(south, BorderLayout.SOUTH);
+        dialog.setContentPane(p);
+        dialog.getRootPane().setDefaultButton(cont);
+        dialog.setSize(640, 360);
+        dialog.setLocationRelativeTo(this);
+        reload.run();
+        dialog.setVisible(true);
+    }
+
+    private static String escape(String s) {
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+    }
+
     /**
      * GitUp's squash / fixup / swap / delete. operations that may change HEAD's tree need a clean
      * working copy, the index and working directory are then reset to the new HEAD.
@@ -1234,10 +1387,10 @@ public class RepoPanel extends JPanel {
                 String result = switch (r) {
                     case SQUASH -> HistoryOps.squashWithParent(workdir, c.oid(), message + "\n");
                     case FIXUP -> HistoryOps.fixupWithParent(workdir, c.oid());
-                    case MOVE_UP -> HistoryOps.swapWithChild(workdir, c.oid());
-                    case MOVE_DOWN -> HistoryOps.swapWithParent(workdir, c.oid());
+                    case MOVE_UP -> HistoryOps.swapWithChild(workdir, c.oid(), this::resolveRewriteConflicts);
+                    case MOVE_DOWN -> HistoryOps.swapWithParent(workdir, c.oid(), this::resolveRewriteConflicts);
                     case DELETE -> {
-                        HistoryOps.delete(workdir, c.oid());
+                        HistoryOps.delete(workdir, c.oid(), this::resolveRewriteConflicts);
                         yield null;
                     }
                 };

@@ -6,7 +6,11 @@
 
 package vavi.apps.gitup.ui;
 
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
@@ -26,11 +30,17 @@ public final class GitExecutor {
 
     private static final System.Logger logger = getLogger(GitExecutor.class.getName());
 
+    private Thread thread;
+
     private final ExecutorService executor = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "git");
         t.setDaemon(true);
+        thread = t;
         return t;
     });
+
+    /** tasks submitted while a task on the git thread {@link #await awaits} the user, null otherwise */
+    private Deque<Runnable> nested;
 
     private final Consumer<Throwable> defaultErrorHandler;
 
@@ -44,7 +54,7 @@ public final class GitExecutor {
     }
 
     public <T> void submit(Callable<T> task, Consumer<T> onDone, Consumer<Throwable> onError) {
-        executor.execute(() -> {
+        execute(() -> {
             try {
                 T result = task.call();
                 if (onDone != null) SwingUtilities.invokeLater(() -> onDone.accept(result));
@@ -58,6 +68,52 @@ public final class GitExecutor {
     /** runs an action without result on the git thread, then onDone on the EDT */
     public void run(Runnable task, Runnable onDone) {
         submit(() -> { task.run(); return null; }, x -> { if (onDone != null) onDone.run(); });
+    }
+
+    private void execute(Runnable r) {
+        synchronized (this) {
+            if (nested != null) {
+                nested.add(r);
+                notifyAll();
+                return;
+            }
+        }
+        executor.execute(r);
+    }
+
+    /**
+     * called by a task on the git thread that waits for the user (e.g. resolving conflicts in the middle of
+     * a history rewrite): tasks submitted meanwhile run here, on the git thread, until the future is done.
+     *
+     * @return the value of the future
+     */
+    public <T> T await(CompletableFuture<T> future) {
+        if (Thread.currentThread() != thread) throw new IllegalStateException("not on the git thread");
+        synchronized (this) {
+            if (nested != null) throw new IllegalStateException("already waiting");
+            nested = new ArrayDeque<>();
+        }
+        future.whenComplete((v, t) -> { synchronized (this) { notifyAll(); } });
+        try {
+            while (true) {
+                Runnable r;
+                synchronized (this) {
+                    while ((r = nested.poll()) == null && !future.isDone()) wait();
+                }
+                if (r == null) return future.get();
+                r.run();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        } catch (ExecutionException e) {
+            throw new IllegalStateException(e.getCause());
+        } finally {
+            synchronized (this) {
+                nested.forEach(executor::execute); // submitted too late, they run after the waiting task
+                nested = null;
+            }
+        }
     }
 
     public void shutdown() {
