@@ -125,6 +125,12 @@ public class SourceTreeIconProvider implements IconProvider {
             case STASH_ITEM -> "stash.tiff";
             case FOLDER -> "Folder";
             case REPOSITORY -> "git_16x16.tiff";
+            case LABEL_BRANCH -> "LogViewBranch";
+            case LABEL_HEAD -> "Current Checkout";
+            case LABEL_TAG -> "LogViewTag";
+            case PREFS_ACCOUNTS -> "Prefs - Accounts";
+            case PREFS_DIFF -> "Prefs - Diff";
+            case PREFS_HISTORY -> "Prefs - Git";
             case FILE_ADDED -> dark ? "added-dark.tiff" : "added.tiff";
             case FILE_MODIFIED -> dark ? "modified-dark.tiff" : "modified.tiff";
             case FILE_DELETED -> dark ? "deleted-dark.tiff" : "deleted.tiff";
@@ -155,7 +161,8 @@ public class SourceTreeIconProvider implements IconProvider {
             for (String n : new String[] {"Repo - Commit", "Repo - Pull", "Repo - Push"}) cache.computeIfAbsent(n + dark, this::load);
         }
         for (String n : new String[] {"Repo - Fetch", "Repo - Branch", "Repo - Stash", "Discard", "Repo - Refresh", "Repo - Tag",
-                "Repo - Merge", "Branches", "Remotes", "Tags", "Stashes", "Folder"}) {
+                "Repo - Merge", "Branches", "Remotes", "Tags", "Stashes", "Folder",
+                "LogViewBranch", "Current Checkout", "LogViewTag", "Prefs - Accounts", "Prefs - Diff", "Prefs - Git"}) {
             cache.computeIfAbsent(n, this::load);
         }
     }

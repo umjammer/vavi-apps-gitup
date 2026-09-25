@@ -75,9 +75,12 @@ public class SettingsWindow extends JFrame {
         super("Settings");
         setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
         JTabbedPane tabs = new JTabbedPane();
-        tabs.addTab("Accounts", accountsTab());
-        tabs.addTab("Diff", diffTab());
-        tabs.addTab("History", historyTab());
+        // SourceTree's preferences: the icon above the title
+        tabs.putClientProperty("JTabbedPane.tabIconPlacement", javax.swing.SwingConstants.TOP);
+        vavi.apps.gitup.ui.icons.IconProvider icons = vavi.apps.gitup.ui.icons.IconProvider.get();
+        tabs.addTab("Accounts", icons.icon(vavi.apps.gitup.ui.icons.IconProvider.Key.PREFS_ACCOUNTS, 24), accountsTab());
+        tabs.addTab("Diff", icons.icon(vavi.apps.gitup.ui.icons.IconProvider.Key.PREFS_DIFF, 24), diffTab());
+        tabs.addTab("History", icons.icon(vavi.apps.gitup.ui.icons.IconProvider.Key.PREFS_HISTORY, 24), historyTab());
         setContentPane(tabs);
         WindowState.remember(this, "settings", new Dimension(720, 460));
     }

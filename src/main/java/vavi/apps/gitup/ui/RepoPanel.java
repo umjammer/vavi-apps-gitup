@@ -264,6 +264,8 @@ public class RepoPanel extends JPanel {
             @Override public void mergeCommit(CommitRow commit) { RepoPanel.this.mergeCommit(commit); }
             @Override public void cherryPick(CommitRow commit) { RepoPanel.this.cherryPick(commit); }
         });
+        sidebar.setLaneColor(logPanel::laneColor);
+        logPanel.setLanesListener(sidebar::repaint);
         sidebar.setListener(new SidebarPanel.Listener() {
             @Override public void checkout(Ref ref) { RepoPanel.this.checkout(ref); }
             @Override public void reveal(Ref ref) { logPanel.select(ref.target()); }

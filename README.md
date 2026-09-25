@@ -18,6 +18,8 @@ SourceTree-like git GUI (Swing) using [GitUp](https://gitup.co)'s `GitUpKit.fram
    ahead ↑ / behind ↓ counts of the current branch against its upstream (as of the last fetch, recomputed when the window
    is activated or with ⌘R)
  * search (⌘F) the whole history: commit messages, file names and changed lines, a result jumps to the commit, file and line
+ * SourceTree-like looks: light blue repository browser icons, ref labels with icons in the log (branch, current branch, tag),
+   settings tabs with icons
  * icons: SourceTree's, read at runtime from an installed SourceTree.app (not distributed), or the built-in ones
    (`-Dgitup.icons=builtin|sourcetree`, `-Dgitup.sourcetree=/path/to/Sourcetree.app`)
  * 3 panes: log with graph / staged + unstaged files (checkbox, drag & drop) / hunk diff
@@ -35,7 +37,7 @@ SourceTree-like git GUI (Swing) using [GitUp](https://gitup.co)'s `GitUpKit.fram
    and a button (amend offers "Commit as New Commit"); the amend checkbox shows "(pushed)" when the last commit is pushed
  * conflicts while moving / deleting a commit are resolved like GitUp: the conflicted files are checked out
    (HEAD detached), use mine / theirs, external merge tool or edit and mark resolved, then continue (the author is kept) or abort (nothing changes)
- * branches / remotes / tags / stashes sidebar, checkout, new branch, stash / apply / pop / delete, show a stash's changes
+ * branches / remotes / tags / stashes sidebar (a branch icon has the color of its line in the graph), checkout, new branch, stash / apply / pop / delete, show a stash's changes
  * branches: rename, delete (SourceTree-like dialog: several at once, force regardless of merge status, the remote branches too),
    delete a branch on the server
  * remotes (each with its branches in the sidebar): new, edit (name, URL, push URL), remove

@@ -510,7 +510,7 @@ public class RepositoryBrowser extends JFrame {
             Object o = ((DefaultMutableTreeNode) v).getUserObject();
             setIcon(null);
             if (o instanceof Repo r) {
-                setIcon(IconProvider.get().icon(IconProvider.Key.REPOSITORY, 16));
+                setIcon(IconProvider.tinted(IconProvider.get().icon(IconProvider.Key.REPOSITORY, 16), IconProvider.LIGHT_BLUE));
                 boolean exists = Files.isDirectory(r.path());
                 String branch = exists ? branchOf(r.path()) : null;
                 vavi.apps.gitup.model.GitRepo.AheadBehind ab = status.getOrDefault(r.path(), java.util.Optional.empty()).orElse(null);
@@ -523,7 +523,7 @@ public class RepositoryBrowser extends JFrame {
                 setToolTipText(ab == null ? r.path().toString() : "<html>" + esc(r.path().toString()) + "<br>" + esc(ab.branch()) + ": "
                         + ab.ahead() + " ahead, " + ab.behind() + " behind " + esc(ab.upstream()) + " (as of the last fetch)</html>");
             } else if (o instanceof Group g) {
-                setIcon(IconProvider.get().icon(IconProvider.Key.FOLDER, 16));
+                setIcon(IconProvider.tinted(IconProvider.get().icon(IconProvider.Key.FOLDER, 16), IconProvider.LIGHT_BLUE));
                 setText(g.name());
                 setFont(t.getFont().deriveFont(java.awt.Font.BOLD));
                 setToolTipText(null);

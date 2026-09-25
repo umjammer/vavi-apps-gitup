@@ -32,6 +32,10 @@ public interface IconProvider {
         BRANCHES, REMOTES, TAGS, STASHES, LOCAL_BRANCH, REMOTE_BRANCH, TAG_ITEM, STASH_ITEM,
         // repository browser
         FOLDER, REPOSITORY,
+        // ref labels in the log
+        LABEL_BRANCH, LABEL_HEAD, LABEL_TAG,
+        // settings tabs
+        PREFS_ACCOUNTS, PREFS_DIFF, PREFS_HISTORY,
         // file status
         FILE_ADDED, FILE_MODIFIED, FILE_DELETED, FILE_RENAMED, FILE_UNTRACKED, FILE_CONFLICTED, FILE_TYPECHANGE
     }
@@ -65,6 +69,64 @@ public interface IconProvider {
                 }
             }
             return new BuiltinIconProvider();
+        }
+    }
+
+    /** SourceTree's light blue of the repository browser icons */
+    java.awt.Color LIGHT_BLUE = new java.awt.Color(0x4fa3e8);
+
+    /** the icon painted in one color (keeping its alpha: shapes and cut-outs), null for null */
+    static Icon tinted(Icon icon, java.awt.Color color) {
+        return icon == null ? null : new TintedIcon(icon, color);
+    }
+
+    /** an icon recolored at the device resolution */
+    record TintedIcon(Icon icon, java.awt.Color color) implements Icon {
+        @Override public void paintIcon(java.awt.Component c, java.awt.Graphics g0, int x, int y) {
+            java.awt.Graphics2D g = (java.awt.Graphics2D) g0;
+            double scale = Math.max(1, g.getTransform().getScaleX());
+            int w = (int) Math.ceil(icon.getIconWidth() * scale), h = (int) Math.ceil(icon.getIconHeight() * scale);
+            if (w <= 0 || h <= 0) return;
+            java.awt.image.BufferedImage image = new java.awt.image.BufferedImage(w, h, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+            java.awt.Graphics2D ig = image.createGraphics();
+            try {
+                ig.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION, java.awt.RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+                ig.scale(scale, scale);
+                icon.paintIcon(c, ig, 0, 0);
+            } finally {
+                ig.dispose();
+            }
+            colorize(image, color);
+            g.drawImage(image, x, y, icon.getIconWidth(), icon.getIconHeight(), null);
+        }
+
+        @Override public int getIconWidth() { return icon.getIconWidth(); }
+        @Override public int getIconHeight() { return icon.getIconHeight(); }
+
+        /**
+         * keeps the alpha and the shading: the darkest pixels become the color, lighter ones
+         * a paler tint of it (an outline stays stronger than a light fill)
+         */
+        static void colorize(java.awt.image.BufferedImage image, java.awt.Color color) {
+            int w = image.getWidth(), h = image.getHeight();
+            int[] px = image.getRGB(0, 0, w, h, null, 0, w);
+            double min = 1;
+            for (int p : px) if ((p >>> 24) > 0x20) min = Math.min(min, luminance(p));
+            double range = Math.max(1e-3, 1 - min);
+            for (int i = 0; i < px.length; i++) {
+                int a = px[i] >>> 24;
+                if (a == 0) continue;
+                double t = Math.min(1, (1 - luminance(px[i])) / range); // 1: darkest → full color
+                int r = (int) Math.round(255 + (color.getRed() - 255) * t);
+                int g = (int) Math.round(255 + (color.getGreen() - 255) * t);
+                int b = (int) Math.round(255 + (color.getBlue() - 255) * t);
+                px[i] = a << 24 | r << 16 | g << 8 | b;
+            }
+            image.setRGB(0, 0, w, h, px, 0, w);
+        }
+
+        private static double luminance(int p) {
+            return (0.299 * (p >> 16 & 0xff) + 0.587 * (p >> 8 & 0xff) + 0.114 * (p & 0xff)) / 255;
         }
     }
 

@@ -57,6 +57,12 @@ public class BuiltinIconProvider implements IconProvider {
             case MERGE -> glyph(size, GREEN, g -> { g.fillOval(4, 2, 5, 5); g.fillOval(4, 17, 5, 5); g.fillOval(15, 9, 5, 5); line(g, 6.5, 7, 6.5, 17); g.draw(curve(6.5, 7, 6.5, 12, 17.5, 9)); });
             case FOLDER -> glyph(size, BLUE, g -> { Path2D p = new Path2D.Double(); p.moveTo(2, 6); p.lineTo(9, 6); p.lineTo(11, 8); p.lineTo(22, 8); p.lineTo(22, 20); p.lineTo(2, 20); p.closePath(); g.draw(p); });
             case REPOSITORY -> glyph(size, ORANGE, g -> { g.drawRoundRect(4, 2, 16, 20, 3, 3); line(g, 8, 2, 8, 22); line(g, 11, 7, 17, 7); line(g, 11, 11, 17, 11); });
+            case LABEL_BRANCH -> glyph(size, GRAY, BuiltinIconProvider::branch);
+            case LABEL_HEAD -> glyph(size, GRAY, g -> { g.setStroke(new BasicStroke(3.5f)); g.drawOval(6, 6, 12, 12); });
+            case LABEL_TAG -> glyph(size, GRAY, BuiltinIconProvider::tag);
+            case PREFS_ACCOUNTS -> glyph(size, GRAY, g -> { g.drawOval(2, 2, 20, 20); g.draw(new java.awt.geom.Ellipse2D.Double(8.5, 6, 7, 7)); g.draw(new java.awt.geom.Arc2D.Double(5.5, 14, 13, 10, 0, 180, java.awt.geom.Arc2D.OPEN)); });
+            case PREFS_DIFF -> glyph(size, GRAY, g -> { g.drawRoundRect(3, 2, 18, 20, 3, 3); line(g, 8, 8, 16, 8); line(g, 8, 16, 16, 16); line(g, 12, 12, 12, 20); });
+            case PREFS_HISTORY -> glyph(size, GRAY, g -> { g.drawOval(2, 2, 20, 20); line(g, 12, 6, 12, 12); line(g, 12, 12, 16, 15); });
             case FILE_ADDED -> badge(size, GREEN, "+");
             case FILE_MODIFIED -> badge(size, BLUE, "…");
             case FILE_DELETED -> badge(size, RED, "−");

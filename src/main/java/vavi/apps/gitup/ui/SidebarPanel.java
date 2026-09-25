@@ -233,6 +233,15 @@ public class SidebarPanel extends JPanel {
         return i;
     }
 
+    /** commit → the color of its lane in the log graph (null: unknown) */
+    private java.util.function.Function<String, java.awt.Color> laneColor = oid -> null;
+
+    /** branch icons take the color of their tip's lane in the graph */
+    public void setLaneColor(java.util.function.Function<String, java.awt.Color> laneColor) {
+        this.laneColor = laneColor;
+        tree.repaint();
+    }
+
     private class Renderer extends DefaultTreeCellRenderer {
         @Override
         public Component getTreeCellRendererComponent(JTree t, Object v, boolean sel, boolean exp, boolean leaf, int row, boolean focus) {
@@ -259,11 +268,13 @@ public class SidebarPanel extends JPanel {
                 }
                 setText(text);
                 setFont(t.getFont().deriveFont(head ? Font.BOLD : Font.PLAIN));
-                setIcon(IconProvider.get().icon(switch (r.kind()) {
+                javax.swing.Icon icon = IconProvider.get().icon(switch (r.kind()) {
                     case REMOTE -> IconProvider.Key.REMOTE_BRANCH;
                     case TAG -> IconProvider.Key.TAG_ITEM;
                     default -> IconProvider.Key.LOCAL_BRANCH;
-                }, 16));
+                }, 16);
+                java.awt.Color lane = r.kind() == Ref.Kind.TAG ? null : laneColor.apply(r.target());
+                setIcon(lane != null ? IconProvider.tinted(icon, lane) : icon);
                 setToolTipText(r.name());
             } else {
                 setFont(t.getFont().deriveFont(Font.BOLD, t.getFont().getSize2D() - 1));

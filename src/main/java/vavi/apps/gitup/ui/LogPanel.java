@@ -157,12 +157,29 @@ public class LogPanel extends JPanel {
         return table;
     }
 
+    /** commit → lane of the loaded rows */
+    private final Map<String, Integer> lanes = new java.util.HashMap<>();
+    /** told when the lanes change (rows reset or appended) */
+    private Runnable lanesListener;
+
+    public void setLanesListener(Runnable lanesListener) {
+        this.lanesListener = lanesListener;
+    }
+
+    /** @return the color of the commit's lane in the graph, null when the commit is not loaded (yet) */
+    public Color laneColor(String oid) {
+        Integer lane = oid != null ? lanes.get(oid) : null;
+        return lane != null ? LANE_COLORS[lane % LANE_COLORS.length] : null;
+    }
+
     /** clears rows, keeps nothing selected */
     public void reset(boolean uncommitted, Map<String, List<Ref>> refs, String headBranch) {
         this.uncommitted = uncommitted;
         this.refs = refs;
         this.headBranch = headBranch;
         rows.clear();
+        lanes.clear();
+        if (lanesListener != null) lanesListener.run();
         more = true;
         loading = false;
         model.fireTableDataChanged();
@@ -172,6 +189,8 @@ public class LogPanel extends JPanel {
     public void append(List<CommitRow> page, boolean hasMore) {
         int first = model.getRowCount();
         rows.addAll(page);
+        for (CommitRow r : page) lanes.put(r.oid(), r.lane());
+        if (!page.isEmpty() && lanesListener != null) lanesListener.run();
         more = hasMore;
         loading = false;
         if (!page.isEmpty()) model.fireTableRowsInserted(first, model.getRowCount() - 1);
@@ -322,37 +341,100 @@ public class LogPanel extends JPanel {
         }
     }
 
-    /** summary with ref badges */
-    private class DescriptionRenderer extends DefaultTableCellRenderer {
+    /** summary with SourceTree-like ref labels: a rounded badge with an icon (branch, current branch, tag) and the name */
+    private class DescriptionRenderer extends JComponent implements TableCellRenderer {
+        private CommitRow row;
+        private String placeholder;
+        private boolean selected;
+        private Color background, foreground;
+
+        DescriptionRenderer() {
+            setOpaque(true);
+        }
+
         @Override
         public Component getTableCellRendererComponent(JTable t, Object v, boolean sel, boolean focus, int r, int c) {
-            super.getTableCellRendererComponent(t, "", sel, false, r, c);
-            if (!(v instanceof CommitRow row)) {
-                setText("<html><i>" + v + "</i></html>");
-                return this;
-            }
-            StringBuilder sb = new StringBuilder("<html>");
-            for (Ref ref : refs.getOrDefault(row.oid(), List.of())) {
-                String color = switch (ref.kind()) {
-                    case LOCAL -> "#dbeafe";
-                    case REMOTE -> "#e9d5ff";
-                    case TAG -> "#fef3c7";
-                    default -> "#e5e7eb";
-                };
-                boolean head = ref.kind() == Ref.Kind.LOCAL && ref.shorthand().equals(headBranch);
-                sb.append("<span style='background-color:").append(color).append(";color:#111'>&nbsp;")
-                  .append(head ? "<b>" : "").append(esc(ref.shorthand())).append(head ? "</b>" : "")
-                  .append("&nbsp;</span> ");
-            }
-            sb.append(esc(row.summary())).append("</html>");
-            setText(sb.toString());
-            setToolTipText(row.parents().size() > 1 ? "merge: " + row.parents().stream().map(p -> p.substring(0, 7)).collect(Collectors.joining(" ")) : null);
+            setFont(t.getFont());
+            selected = sel;
+            background = sel ? t.getSelectionBackground() : t.getBackground();
+            foreground = sel ? t.getSelectionForeground() : t.getForeground();
+            row = v instanceof CommitRow x ? x : null;
+            placeholder = row == null ? String.valueOf(v) : null;
+            setToolTipText(row != null && row.parents().size() > 1
+                    ? "merge: " + row.parents().stream().map(p -> p.substring(0, 7)).collect(Collectors.joining(" ")) : null);
             return this;
         }
 
-        private static String esc(String s) {
-            return s.replace("&", "&amp;").replace("<", "&lt;");
+        @Override
+        protected void paintComponent(Graphics g0) {
+            Graphics2D g = (Graphics2D) g0.create();
+            try {
+                g.setColor(background);
+                g.fillRect(0, 0, getWidth(), getHeight());
+                g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+                Font font = getFont();
+                java.awt.FontMetrics fm = g.getFontMetrics(font);
+                int h = getHeight();
+                int baseline = (h - fm.getHeight()) / 2 + fm.getAscent();
+                int x = 4;
+                if (row == null) {
+                    g.setFont(font.deriveFont(Font.ITALIC));
+                    g.setColor(foreground);
+                    g.drawString(placeholder, x, baseline);
+                    return;
+                }
+                for (Ref ref : refs.getOrDefault(row.oid(), List.of())) {
+                    x = paintLabel(g, ref, x, h) + 4;
+                }
+                g.setFont(font);
+                g.setColor(foreground);
+                g.drawString(row.summary(), x, baseline);
+            } finally {
+                g.dispose();
+            }
         }
+
+        /** @return the right end of the label */
+        private int paintLabel(Graphics2D g, Ref ref, int x, int h) {
+            boolean head = ref.kind() == Ref.Kind.LOCAL && ref.shorthand().equals(headBranch);
+            Color[] c = labelColors(ref.kind());
+            Font font = head ? getFont().deriveFont(Font.BOLD) : getFont();
+            java.awt.FontMetrics fm = g.getFontMetrics(font);
+            int iconSize = Math.max(12, fm.getHeight() - 2);
+            javax.swing.Icon icon = vavi.apps.gitup.ui.icons.IconProvider.get().icon(switch (ref.kind()) {
+                case TAG -> vavi.apps.gitup.ui.icons.IconProvider.Key.LABEL_TAG;
+                default -> head ? vavi.apps.gitup.ui.icons.IconProvider.Key.LABEL_HEAD : vavi.apps.gitup.ui.icons.IconProvider.Key.LABEL_BRANCH;
+            }, iconSize);
+            String text = ref.shorthand();
+            int pad = 4, gap = 3;
+            int w = pad + (icon != null ? icon.getIconWidth() + gap : 0) + fm.stringWidth(text) + pad + 1;
+            int lh = Math.min(h - 2, fm.getHeight() + 2);
+            int y = (h - lh) / 2;
+            g.setColor(c[0]);
+            g.fillRoundRect(x, y, w, lh, 6, 6);
+            g.setColor(c[1]);
+            g.drawRoundRect(x, y, w, lh, 6, 6);
+            int ix = x + pad;
+            if (icon != null) {
+                icon.paintIcon(this, g, ix, y + (lh - icon.getIconHeight()) / 2 + 1);
+                ix += icon.getIconWidth() + gap;
+            }
+            g.setFont(font);
+            g.setColor(new Color(0x111111));
+            g.drawString(text, ix, y + (lh - fm.getHeight()) / 2 + fm.getAscent() + 1);
+            return x + w;
+        }
+    }
+
+    /** fill and border of a ref label */
+    private static Color[] labelColors(Ref.Kind kind) {
+        return switch (kind) {
+            case LOCAL -> new Color[] {new Color(0xdbeafe), new Color(0x93b4e6)};
+            case REMOTE -> new Color[] {new Color(0xe9d5ff), new Color(0xb89ae0)};
+            case TAG -> new Color[] {new Color(0xfef3c7), new Color(0xd9bf6a)};
+            default -> new Color[] {new Color(0xe5e7eb), new Color(0xb0b4bb)};
+        };
     }
 
     /** paints lanes, edges and the commit node */
