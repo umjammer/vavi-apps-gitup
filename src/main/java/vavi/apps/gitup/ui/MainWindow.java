@@ -99,6 +99,7 @@ public class MainWindow extends JFrame {
         JMenu file = new JMenu("File");
         file.add(action("Open Repository…", KeyStroke.getKeyStroke(KeyEvent.VK_O, menu), app::chooseAndOpen));
         file.add(action("Repository Browser", KeyStroke.getKeyStroke(KeyEvent.VK_B, menu), app::showBrowser));
+        file.add(action("Settings…", KeyStroke.getKeyStroke(KeyEvent.VK_COMMA, menu), SettingsWindow::open));
         file.addSeparator();
         file.add(action("Close Tab", KeyStroke.getKeyStroke(KeyEvent.VK_W, menu), () -> {
             if (tabs.getSelectedIndex() >= 0) closeTab(tabs.getSelectedIndex());

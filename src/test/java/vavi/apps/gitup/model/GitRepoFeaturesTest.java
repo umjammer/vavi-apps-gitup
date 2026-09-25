@@ -564,6 +564,25 @@ class GitRepoFeaturesTest {
         assertEquals("", sh(b, "status", "--porcelain"));
     }
 
+    /** contents for external diff / merge tools */
+    @Test
+    void contents() throws Exception {
+        Path b = setupClone();
+        pushFromA(3, "THREE-A");
+        commitInB(b, 3, "THREE-B");
+        sh(b, "fetch", "-q");
+        try (GitRepo repo = new GitRepo(b)) {
+            assertEquals("1\n2\nTHREE-B\n4\n5\n", new String(repo.contentAt("HEAD", "f.txt")));
+            assertEquals("1\n2\n3\n4\n5\n", new String(repo.contentAt("HEAD~1", "f.txt")));
+            assertNull(repo.contentAt("HEAD", "none.txt"));
+            assertEquals("1\n2\nTHREE-B\n4\n5\n", new String(repo.indexContent("f.txt", 0)));
+            assertEquals(PullResult.CONFLICTS, repo.pullFromUpstream());
+            assertEquals("1\n2\n3\n4\n5\n", new String(repo.indexContent("f.txt", 1)), "base");
+            assertEquals("1\n2\nTHREE-B\n4\n5\n", new String(repo.indexContent("f.txt", 2)), "ours");
+            assertEquals("1\n2\nTHREE-A\n4\n5\n", new String(repo.indexContent("f.txt", 3)), "theirs");
+        }
+    }
+
     @Test
     void pullUpToDate() throws Exception {
         Path b = setupClone();

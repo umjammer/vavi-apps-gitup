@@ -38,6 +38,7 @@ import vavi.apps.gitup.model.LazyPatch;
 import vavi.apps.gitup.model.LazyPatch.Hunk;
 import vavi.apps.gitup.model.LazyPatch.Row;
 import vavi.apps.gitup.model.PartialPatchBuilder;
+import vavi.apps.gitup.model.Settings;
 
 
 /**
@@ -204,6 +205,24 @@ public class DiffView extends JComponent implements Scrollable {
 
     // painting
 
+    /** the color from the settings, or the theme's default */
+    private static Color color(Settings.DiffColor key) {
+        Color c = Settings.get().diffColor(key);
+        return c != null ? c : defaultColor(key);
+    }
+
+    /** the default for the current (light / dark) theme */
+    public static Color defaultColor(Settings.DiffColor key) {
+        Color bg = UIManager.getColor("Panel.background");
+        boolean dark = bg != null && (bg.getRed() + bg.getGreen() + bg.getBlue()) / 3 < 128;
+        return switch (key) {
+            case ADDED -> dark ? new Color(0x1f3d2a) : new Color(0xe6ffed);
+            case REMOVED -> dark ? new Color(0x4a2127) : new Color(0xffeef0);
+            case HUNK_HEADER -> dark ? new Color(0x2b3445) : new Color(0xf1f8ff);
+            case SELECTION -> dark ? new Color(0x3d5a80) : new Color(0xb4d5fe);
+        };
+    }
+
     private boolean isDark() {
         Color bg = UIManager.getColor("Panel.background");
         return bg != null && (bg.getRed() + bg.getGreen() + bg.getBlue()) / 3 < 128;
@@ -217,10 +236,10 @@ public class DiffView extends JComponent implements Scrollable {
         Color bg = UIManager.getColor("TextArea.background");
         Color fg = UIManager.getColor("TextArea.foreground");
         Color dim = UIManager.getColor("Label.disabledForeground");
-        Color addBg = dark ? new Color(0x1f3d2a) : new Color(0xe6ffed);
-        Color delBg = dark ? new Color(0x4a2127) : new Color(0xffeef0);
-        Color headBg = dark ? new Color(0x2b3445) : new Color(0xf1f8ff);
-        Color selBg = dark ? new Color(0x3d5a80) : new Color(0xb4d5fe);
+        Color addBg = color(Settings.DiffColor.ADDED);
+        Color delBg = color(Settings.DiffColor.REMOVED);
+        Color headBg = color(Settings.DiffColor.HUNK_HEADER);
+        Color selBg = color(Settings.DiffColor.SELECTION);
         Color gutterBg = dark ? bg.brighter() : new Color(0xf6f8fa);
 
         Rectangle clip = g.getClipBounds();

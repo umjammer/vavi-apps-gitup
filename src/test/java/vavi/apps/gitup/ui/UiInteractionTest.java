@@ -160,6 +160,8 @@ class UiInteractionTest {
                 @Override public void ignore(List<FileChange> files) {}
                 @Override public void trash(List<FileChange> files) {}
                 @Override public void resolve(List<FileChange> files, boolean ours) {}
+                @Override public void externalDiff(List<FileChange> files) {}
+                @Override public void externalMerge(FileChange file) {}
             };
             staged.setListener(l);
             unstaged.setListener(l);

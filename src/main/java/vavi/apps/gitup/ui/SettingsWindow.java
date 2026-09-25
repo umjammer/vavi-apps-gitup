@@ -1,0 +1,476 @@
+/*
+ * Copyright (c) 2026 by Naohide Sano, All rights reserved.
+ *
+ * Programmed by Naohide Sano
+ */
+
+package vavi.apps.gitup.ui;
+
+import java.awt.BorderLayout;
+import java.awt.Color;
+import java.awt.Component;
+import java.awt.Dimension;
+import java.awt.FlowLayout;
+import java.awt.GridBagConstraints;
+import java.awt.GridBagLayout;
+import java.awt.Insets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import javax.swing.BorderFactory;
+import javax.swing.DefaultCellEditor;
+import javax.swing.JButton;
+import javax.swing.JColorChooser;
+import javax.swing.JComboBox;
+import javax.swing.JComponent;
+import javax.swing.JFileChooser;
+import javax.swing.JFrame;
+import javax.swing.JLabel;
+import javax.swing.JOptionPane;
+import javax.swing.JPanel;
+import javax.swing.JPasswordField;
+import javax.swing.JScrollPane;
+import javax.swing.JSpinner;
+import javax.swing.JTabbedPane;
+import javax.swing.JTable;
+import javax.swing.JTextField;
+import javax.swing.SpinnerNumberModel;
+import javax.swing.WindowConstants;
+import javax.swing.table.AbstractTableModel;
+
+import vavi.apps.gitup.model.Accounts;
+import vavi.apps.gitup.model.Accounts.Account;
+import vavi.apps.gitup.model.Accounts.Protocol;
+import vavi.apps.gitup.model.Accounts.Service;
+import vavi.apps.gitup.model.ExternalTool;
+import vavi.apps.gitup.model.MavenSettings;
+import vavi.apps.gitup.model.MavenSettings.Server;
+import vavi.apps.gitup.model.Settings;
+import vavi.apps.gitup.model.Settings.DiffColor;
+
+
+/**
+ * SourceTree-like settings: accounts (with the maven settings.xml import) and diff
+ * (colors, context lines, external diff / merge tools).
+ *
+ * @author <a href="mailto:umjammer@gmail.com">Naohide Sano</a> (nsano)
+ * @version 0.00 2026-09-26 nsano initial version <br>
+ */
+public class SettingsWindow extends JFrame {
+
+    private static SettingsWindow instance;
+
+    /** shows the (single) settings window */
+    public static void open() {
+        if (instance == null || !instance.isDisplayable()) instance = new SettingsWindow();
+        instance.setVisible(true);
+        instance.toFront();
+    }
+
+    private final Accounts accounts = Accounts.get();
+    private final Settings settings = Settings.get();
+
+    private SettingsWindow() {
+        super("Settings");
+        setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
+        JTabbedPane tabs = new JTabbedPane();
+        tabs.addTab("Accounts", accountsTab());
+        tabs.addTab("Diff", diffTab());
+        setContentPane(tabs);
+        WindowState.remember(this, "settings", new Dimension(720, 460));
+    }
+
+    // accounts
+
+    private final AccountModel accountModel = new AccountModel();
+    private final JTable accountTable = new JTable(accountModel);
+
+    private class AccountModel extends AbstractTableModel {
+        List<Account> list = accounts.list();
+        private final String[] names = {"Service", "Host", "Username", "Protocol"};
+
+        void reload() {
+            list = accounts.list();
+            fireTableDataChanged();
+        }
+
+        @Override public int getRowCount() { return list.size(); }
+        @Override public int getColumnCount() { return names.length; }
+        @Override public String getColumnName(int c) { return names[c]; }
+        @Override public Object getValueAt(int r, int c) {
+            Account a = list.get(r);
+            return switch (c) {
+                case 0 -> a.service();
+                case 1 -> a.host();
+                case 2 -> a.username();
+                default -> a.protocol();
+            };
+        }
+    }
+
+    private JComponent accountsTab() {
+        accountTable.setShowGrid(false);
+        accountTable.setRowHeight(accountTable.getFontMetrics(accountTable.getFont()).getHeight() + 8);
+        accountTable.setToolTipText("double click to edit");
+        accountTable.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override public void mouseClicked(java.awt.event.MouseEvent e) {
+                if (e.getClickCount() != 2 || !javax.swing.SwingUtilities.isLeftMouseButton(e)) return;
+                int r = accountTable.rowAtPoint(e.getPoint());
+                if (r >= 0) editAccount(accountModel.list.get(accountTable.convertRowIndexToModel(r)));
+            }
+        });
+        JButton add = new JButton("Add…");
+        add.addActionListener(e -> editAccount(null));
+        JButton edit = new JButton("Edit…");
+        edit.addActionListener(e -> {
+            int r = accountTable.getSelectedRow();
+            if (r >= 0) editAccount(accountModel.list.get(r));
+        });
+        JButton remove = new JButton("Remove");
+        remove.addActionListener(e -> {
+            int r = accountTable.getSelectedRow();
+            if (r < 0) return;
+            Account a = accountModel.list.get(r);
+            int answer = JOptionPane.showConfirmDialog(this, "Remove the account " + a + "?\nAlso delete its password / token from the Keychain?",
+                    "Remove Account", JOptionPane.YES_NO_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE);
+            if (answer == JOptionPane.CANCEL_OPTION || answer == JOptionPane.CLOSED_OPTION) return;
+            try {
+                accounts.remove(a, answer == JOptionPane.YES_OPTION);
+            } catch (RuntimeException ex) {
+                error(ex);
+            }
+            accountModel.reload();
+        });
+        JButton maven = new JButton("Import from Maven settings.xml…");
+        maven.addActionListener(e -> importMaven());
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        buttons.add(add);
+        buttons.add(edit);
+        buttons.add(remove);
+        buttons.add(maven);
+        JLabel note = new JLabel("<html><font color='gray'>passwords and tokens are kept in the macOS Keychain (internet passwords, "
+                + "shared with git's osxkeychain credential helper). they are used when a fetch / push asks for credentials.</font></html>");
+        JPanel p = new JPanel(new BorderLayout(0, 6));
+        p.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
+        p.add(new JScrollPane(accountTable), BorderLayout.CENTER);
+        JPanel south = new JPanel(new BorderLayout());
+        south.add(buttons, BorderLayout.NORTH);
+        south.add(note, BorderLayout.SOUTH);
+        p.add(south, BorderLayout.SOUTH);
+        return p;
+    }
+
+    /** @param a null for a new account */
+    private void editAccount(Account a) {
+        JComboBox<Service> service = new JComboBox<>(Service.values());
+        JTextField host = new JTextField(a != null ? a.host() : Service.GITHUB.defaultHost, 24);
+        JTextField user = new JTextField(a != null ? a.username() : "", 24);
+        JPasswordField secret = new JPasswordField(24);
+        secret.putClientProperty("JTextField.placeholderText", a != null ? "unchanged" : "password or personal access token");
+        JComboBox<Protocol> protocol = new JComboBox<>(Protocol.values());
+        if (a != null) {
+            service.setSelectedItem(a.service());
+            protocol.setSelectedItem(a.protocol());
+        }
+        service.addActionListener(e -> {
+            Service s = (Service) service.getSelectedItem();
+            if (s != null && !s.defaultHost.isEmpty()) host.setText(s.defaultHost);
+        });
+        JPanel p = form(new String[] {"Hosting service:", "Host:", "Username:", "Password / token:", "Protocol:"},
+                new JComponent[] {service, host, user, secret, protocol});
+        if (JOptionPane.showConfirmDialog(this, p, a != null ? "Edit Account" : "Add Account", JOptionPane.OK_CANCEL_OPTION,
+                JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) return;
+        if (host.getText().isBlank() || user.getText().isBlank()) {
+            error(new IllegalArgumentException("a host and a username are needed"));
+            return;
+        }
+        try {
+            if (a != null && (!a.host().equalsIgnoreCase(host.getText().strip()) || !a.username().equals(user.getText().strip()))) {
+                // moved: carry the old secret over when no new one is given
+                String old = secret.getPassword().length == 0 ? accounts.secret(a) : null;
+                accounts.remove(a, true);
+                accounts.put(new Account((Service) service.getSelectedItem(), host.getText().strip(), user.getText().strip(),
+                        (Protocol) protocol.getSelectedItem()), old != null ? old : new String(secret.getPassword()));
+            } else {
+                accounts.put(new Account((Service) service.getSelectedItem(), host.getText().strip(), user.getText().strip(),
+                        (Protocol) protocol.getSelectedItem()), new String(secret.getPassword()));
+            }
+        } catch (RuntimeException ex) {
+            error(ex);
+        }
+        accountModel.reload();
+    }
+
+    /**
+     * imports the servers of ~/.m2/settings.xml: a table with a checkbox per server,
+     * the service and host guessed from the server id (editable), the username editable.
+     */
+    private void importMaven() {
+        Path file = MavenSettings.defaultFile();
+        if (!Files.exists(file)) {
+            JFileChooser chooser = new JFileChooser(System.getProperty("user.home"));
+            chooser.setFileHidingEnabled(false);
+            if (chooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) return;
+            file = chooser.getSelectedFile().toPath();
+        }
+        List<Server> servers;
+        try {
+            servers = MavenSettings.read(file);
+        } catch (Exception e) {
+            error(e);
+            return;
+        }
+        if (servers.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "No servers in " + file, "Import", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        ImportModel model = new ImportModel(servers);
+        JTable table = new JTable(model);
+        table.setRowHeight(table.getFontMetrics(table.getFont()).getHeight() + 8);
+        table.getColumnModel().getColumn(0).setMaxWidth(40);
+        table.getColumnModel().getColumn(4).setCellEditor(new DefaultCellEditor(new JComboBox<>(Service.values())));
+        JScrollPane scroll = new JScrollPane(table);
+        scroll.setPreferredSize(new Dimension(680, Math.min(320, 40 + 28 * servers.size())));
+        JPanel p = new JPanel(new BorderLayout(0, 6));
+        p.add(new JLabel("Import the checked servers of " + file + " as accounts (username, service and host are editable):"), BorderLayout.NORTH);
+        p.add(scroll, BorderLayout.CENTER);
+        p.add(new JLabel("<html><font color='gray'>encrypted passwords ({…}) need maven's master password and cannot be imported, "
+                + "servers without a password or token neither.</font></html>"), BorderLayout.SOUTH);
+        if (JOptionPane.showConfirmDialog(this, p, "Import from Maven settings.xml", JOptionPane.OK_CANCEL_OPTION,
+                JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) return;
+        if (table.isEditing()) table.getCellEditor().stopCellEditing();
+        int n = 0;
+        List<String> skipped = new ArrayList<>();
+        for (ImportModel.Row r : model.rows) {
+            if (!r.checked) continue;
+            if (r.username == null || r.username.isBlank() || r.host == null || r.host.isBlank()) {
+                skipped.add(r.server.id() + " (no username / host)");
+                continue;
+            }
+            try {
+                accounts.put(new Account(r.service, r.host.strip(), r.username.strip(), Protocol.HTTPS), r.server.secret());
+                n++;
+            } catch (RuntimeException e) {
+                skipped.add(r.server.id() + " (" + e.getMessage() + ")");
+            }
+        }
+        accountModel.reload();
+        JOptionPane.showMessageDialog(this, "Imported " + n + " account(s)." + (skipped.isEmpty() ? "" : "\nSkipped: " + String.join(", ", skipped)),
+                "Import", JOptionPane.INFORMATION_MESSAGE);
+    }
+
+    /** servers to import: [import] id, username, secret, service, host */
+    private static class ImportModel extends AbstractTableModel {
+        static class Row {
+            final Server server;
+            boolean checked;
+            String username;
+            Service service;
+            String host;
+
+            Row(Server s) {
+                server = s;
+                service = Service.guess(s.id());
+                host = service.defaultHost.isEmpty() ? s.id() : service.defaultHost;
+                username = s.username() != null ? s.username() : service == Service.GITLAB && s.usable() ? "oauth2" : "";
+                checked = s.usable() && !username.isBlank();
+            }
+        }
+
+        final List<Row> rows = new ArrayList<>();
+        private final String[] names = {"", "Server id", "Username", "Secret", "Service", "Host"};
+
+        ImportModel(List<Server> servers) {
+            servers.forEach(s -> rows.add(new Row(s)));
+        }
+
+        @Override public int getRowCount() { return rows.size(); }
+        @Override public int getColumnCount() { return names.length; }
+        @Override public String getColumnName(int c) { return names[c]; }
+        @Override public Class<?> getColumnClass(int c) { return c == 0 ? Boolean.class : c == 4 ? Service.class : String.class; }
+
+        @Override public boolean isCellEditable(int r, int c) {
+            return (c == 0 && rows.get(r).server.usable()) || c == 2 || c == 4 || c == 5;
+        }
+
+        @Override public Object getValueAt(int r, int c) {
+            Row row = rows.get(r);
+            return switch (c) {
+                case 0 -> row.checked;
+                case 1 -> row.server.id();
+                case 2 -> row.username;
+                case 3 -> switch (row.server.kind()) {
+                    case PASSWORD -> "password";
+                    case TOKEN -> "token (http header)";
+                    case ENCRYPTED -> "encrypted, not importable";
+                    case NONE -> "none";
+                };
+                case 4 -> row.service;
+                default -> row.host;
+            };
+        }
+
+        @Override public void setValueAt(Object v, int r, int c) {
+            Row row = rows.get(r);
+            switch (c) {
+                case 0 -> row.checked = (Boolean) v;
+                case 2 -> row.username = (String) v;
+                case 4 -> {
+                    row.service = (Service) v;
+                    if (!row.service.defaultHost.isEmpty()) row.host = row.service.defaultHost;
+                    fireTableRowsUpdated(r, r);
+                }
+                case 5 -> row.host = (String) v;
+                default -> {}
+            }
+        }
+    }
+
+    // diff
+
+    private JComponent diffTab() {
+        JPanel colors = new JPanel(new GridBagLayout());
+        colors.setBorder(BorderFactory.createTitledBorder("Colors"));
+        GridBagConstraints c = new GridBagConstraints();
+        c.insets = new Insets(3, 6, 3, 6);
+        c.anchor = GridBagConstraints.WEST;
+        int row = 0;
+        for (DiffColor key : DiffColor.values()) {
+            c.gridy = row++;
+            c.gridx = 0;
+            colors.add(new JLabel(switch (key) {
+                case ADDED -> "Added lines:";
+                case REMOVED -> "Removed lines:";
+                case HUNK_HEADER -> "Hunk headers:";
+                case SELECTION -> "Selected lines:";
+            }), c);
+            JButton swatch = new JButton("      ");
+            JLabel status = new JLabel();
+            Runnable update = () -> {
+                Color col = settings.diffColor(key);
+                swatch.setBackground(col != null ? col : DiffView.defaultColor(key));
+                swatch.setOpaque(true);
+                status.setText(col != null ? String.format("#%06x", col.getRGB() & 0xffffff) : "default");
+            };
+            update.run();
+            swatch.addActionListener(e -> {
+                Color current = settings.diffColor(key);
+                Color chosen = JColorChooser.showDialog(this, "Diff color", current != null ? current : DiffView.defaultColor(key));
+                if (chosen != null) {
+                    settings.setDiffColor(key, chosen);
+                    update.run();
+                }
+            });
+            JButton reset = new JButton("Default");
+            reset.addActionListener(e -> {
+                settings.setDiffColor(key, null);
+                update.run();
+            });
+            c.gridx = 1;
+            colors.add(swatch, c);
+            c.gridx = 2;
+            colors.add(reset, c);
+            c.gridx = 3;
+            c.weightx = 1; // left aligned rows, the rest of the width is empty
+            colors.add(status, c);
+            c.weightx = 0;
+        }
+
+        JSpinner context = new JSpinner(new SpinnerNumberModel(settings.contextLines(), 0, 50, 1));
+        context.addChangeListener(e -> settings.setContextLines((Integer) context.getValue()));
+        JPanel general = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        general.add(new JLabel("Lines of context:"));
+        general.add(context);
+
+        JPanel tools = new JPanel(new GridBagLayout());
+        tools.setBorder(BorderFactory.createTitledBorder("External Diff / Merge"));
+        toolRow(tools, 0, "Visual Diff Tool:", settings.diffToolId(), settings.customDiffCommand(), true);
+        toolRow(tools, 1, "Merge Tool:", settings.mergeToolId(), settings.customMergeCommand(), false);
+        GridBagConstraints h = new GridBagConstraints();
+        h.gridy = 2;
+        h.gridx = 0;
+        h.gridwidth = 3;
+        h.anchor = GridBagConstraints.WEST;
+        h.insets = new Insets(4, 6, 4, 6);
+        tools.add(new JLabel("<html><font color='gray'>a custom command runs with /bin/sh, the files are in "
+                + "\"$LOCAL\" \"$REMOTE\" (and \"$BASE\" \"$MERGED\" for merging)</font></html>"), h);
+
+        JPanel p = new JPanel();
+        p.setLayout(new javax.swing.BoxLayout(p, javax.swing.BoxLayout.Y_AXIS));
+        p.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
+        for (JComponent x : new JComponent[] {colors, general, tools}) {
+            x.setAlignmentX(Component.LEFT_ALIGNMENT);
+            p.add(x);
+        }
+        JPanel wrap = new JPanel(new BorderLayout());
+        wrap.add(p, BorderLayout.NORTH);
+        JScrollPane scroll = new JScrollPane(wrap, JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED, JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        scroll.setBorder(null);
+        return scroll;
+    }
+
+    private void toolRow(JPanel panel, int row, String label, String id, String custom, boolean diff) {
+        List<ExternalTool> tools = ExternalTool.PRESETS.stream().filter(t -> t.id().equals(ExternalTool.CUSTOM) || (diff ? t.diff() : t.merge()) != null).toList();
+        JComboBox<ExternalTool> combo = new JComboBox<>(tools.toArray(ExternalTool[]::new));
+        combo.setSelectedItem(ExternalTool.preset(id));
+        JTextField command = new JTextField(custom.isBlank() ? commandOf(ExternalTool.preset(id), diff) : custom, 24);
+        command.setToolTipText("<html>the command, run by /bin/sh</html>");
+        command.setEditable(id.equals(ExternalTool.CUSTOM));
+        Runnable save = () -> {
+            ExternalTool t = (ExternalTool) combo.getSelectedItem();
+            boolean isCustom = t != null && t.id().equals(ExternalTool.CUSTOM);
+            if (diff) settings.setDiffTool(t != null ? t.id() : "filemerge", isCustom ? command.getText() : "");
+            else settings.setMergeTool(t != null ? t.id() : "filemerge", isCustom ? command.getText() : "");
+        };
+        combo.addActionListener(e -> {
+            ExternalTool t = (ExternalTool) combo.getSelectedItem();
+            boolean isCustom = t != null && t.id().equals(ExternalTool.CUSTOM);
+            command.setEditable(isCustom);
+            if (!isCustom && t != null) command.setText(commandOf(t, diff));
+            save.run();
+        });
+        command.addActionListener(e -> save.run());
+        command.addFocusListener(new java.awt.event.FocusAdapter() {
+            @Override public void focusLost(java.awt.event.FocusEvent e) { save.run(); }
+        });
+        GridBagConstraints c = new GridBagConstraints();
+        c.gridy = row;
+        c.insets = new Insets(4, 6, 4, 6);
+        c.anchor = GridBagConstraints.WEST;
+        c.gridx = 0;
+        panel.add(new JLabel(label), c);
+        c.gridx = 1;
+        panel.add(combo, c);
+        c.gridx = 2;
+        c.fill = GridBagConstraints.HORIZONTAL;
+        c.weightx = 1;
+        panel.add(command, c);
+    }
+
+    private static String commandOf(ExternalTool t, boolean diff) {
+        String s = diff ? t.diff() : t.merge();
+        return s != null ? s : "";
+    }
+
+    private static JPanel form(String[] labels, JComponent[] fields) {
+        JPanel p = new JPanel(new GridBagLayout());
+        GridBagConstraints c = new GridBagConstraints();
+        c.insets = new Insets(3, 3, 3, 3);
+        c.anchor = GridBagConstraints.WEST;
+        for (int i = 0; i < labels.length; i++) {
+            c.gridy = i;
+            c.gridx = 0;
+            p.add(new JLabel(labels[i]), c);
+            c.gridx = 1;
+            c.fill = GridBagConstraints.HORIZONTAL;
+            p.add(fields[i], c);
+            c.fill = GridBagConstraints.NONE;
+        }
+        return p;
+    }
+
+    private void error(Exception e) {
+        JOptionPane.showMessageDialog(this, e.getMessage() != null ? e.getMessage() : e.toString(), "Error", JOptionPane.ERROR_MESSAGE);
+    }
+}

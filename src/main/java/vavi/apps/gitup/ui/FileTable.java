@@ -64,6 +64,10 @@ public class FileTable extends JTable {
         void trash(List<FileChange> files);
         /** resolves conflicted files with our or their version */
         void resolve(List<FileChange> files, boolean ours);
+        /** opens the external diff tool on the files */
+        void externalDiff(List<FileChange> files);
+        /** opens the external merge tool on a conflicted file */
+        void externalMerge(FileChange file);
     }
 
     /** the "Files" table of a commit has no checkbox and no actions */
@@ -172,11 +176,13 @@ public class FileTable extends JTable {
         JPopupMenu menu = new JPopupMenu();
         boolean existing = workdir != null && files.stream().anyMatch(f -> java.nio.file.Files.exists(workdir.resolve(f.path())));
         item(menu, "Open", () -> open(files)).setEnabled(existing);
+        if (listener != null) item(menu, "External Diff", () -> listener.externalDiff(files));
         menu.addSeparator();
         List<FileChange> conflicted = files.stream().filter(f -> f.kind() == FileChange.Kind.CONFLICTED).toList();
         if (checkable && listener != null && !conflicted.isEmpty()) {
             item(menu, "Resolve Using Mine", () -> listener.resolve(conflicted, true));
             item(menu, "Resolve Using Theirs", () -> listener.resolve(conflicted, false));
+            item(menu, "Launch External Merge Tool", () -> listener.externalMerge(conflicted.getFirst()));
             menu.addSeparator();
         }
         if (checkable && listener != null) {

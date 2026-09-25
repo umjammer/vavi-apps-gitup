@@ -206,6 +206,8 @@ public interface LibGit2 extends Library {
     int git_index_add_bypath(Pointer index, String path);
     int git_index_remove_bypath(Pointer index, String path);
     int git_index_write_tree(GitOid out, Pointer index);
+    /** @return const git_index_entry*, null when not found */
+    Pointer git_index_get_bypath(Pointer index, String path, int stage);
     int git_index_has_conflicts(Pointer index);
     void git_index_free(Pointer index);
 

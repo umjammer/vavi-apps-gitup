@@ -277,6 +277,11 @@ public class RepositoryBrowser extends JFrame {
         menu.add(group);
         menu.addSeparator();
         menu.add(importSt);
+        menu.addSeparator();
+        JMenuItem settings = new JMenuItem("Settings…");
+        settings.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_COMMA, Keys.menu()));
+        settings.addActionListener(e -> SettingsWindow.open());
+        menu.add(settings);
         bar.add(menu);
         return bar;
     }

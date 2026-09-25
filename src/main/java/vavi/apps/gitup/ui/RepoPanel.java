@@ -148,6 +148,7 @@ public class RepoPanel extends JPanel {
         exec.submit(() -> {
             repo = new GitRepo(path);
             repo.setCommandLog(commandLog);
+            repo.setContextLines(vavi.apps.gitup.model.Settings.get().contextLines());
             return repo;
         }, r -> {
             workdir = r.workdir();
@@ -184,8 +185,27 @@ public class RepoPanel extends JPanel {
         return getRepositoryName() + (headBranch != null ? " (" + headBranch + ")" : "");
     }
 
+    /** diff colors repaint, the context lines reopen the shown diff */
+    private final Runnable settingsListener = () -> SwingUtilities.invokeLater(() -> {
+        diff.repaint();
+        int n = vavi.apps.gitup.model.Settings.get().contextLines();
+        if (repo == null && workdir == null) return;
+        exec.run(() -> repo.setContextLines(n), () -> {
+            if (showingWorking) reopenCurrentFile();
+            else {
+                List<FileChange> sel = staging.commitTable.selectedFiles();
+                if (sel.size() == 1 && selectedCommit != null) showCommitFile(rangeOldest, selectedCommit, sel.getFirst());
+            }
+        });
+    });
+
+    {
+        vavi.apps.gitup.model.Settings.get().addListener(settingsListener);
+    }
+
     /** stops watching and closes the repository */
     public void close() {
+        vavi.apps.gitup.model.Settings.get().removeListener(settingsListener);
         watchTimer.stop();
         if (watcher != null) {
             watcher.close();
@@ -273,9 +293,25 @@ public class RepoPanel extends JPanel {
             @Override public void resolve(List<FileChange> list, boolean ours) {
                 exec.run(() -> list.forEach(f -> repo.resolveConflict(f.path(), ours)), RepoPanel.this::refreshStatus);
             }
+            @Override public void externalDiff(List<FileChange> list) { list.forEach(f -> RepoPanel.this.externalDiff(f, null, null)); }
+            @Override public void externalMerge(FileChange f) { RepoPanel.this.externalMerge(f); }
         };
         staging.stagedTable.setListener(files);
         staging.unstagedTable.setListener(files);
+        // a commit's files: only the external diff (between the parent of the oldest and the newest selected)
+        staging.commitTable.setListener(new FileTable.Listener() {
+            @Override public void move(FileTable source, List<FileChange> list) {}
+            @Override public void discard(List<FileChange> list) {}
+            @Override public void stopTracking(List<FileChange> list) {}
+            @Override public void ignore(List<FileChange> list) {}
+            @Override public void trash(List<FileChange> list) {}
+            @Override public void resolve(List<FileChange> list, boolean ours) {}
+            @Override public void externalDiff(List<FileChange> list) {
+                String oldest = rangeOldest, newest = selectedCommit;
+                if (oldest != null && newest != null) list.forEach(f -> RepoPanel.this.externalDiff(f, oldest, newest));
+            }
+            @Override public void externalMerge(FileChange f) {}
+        });
         staging.stagedTable.getSelectionModel().addListSelectionListener(e -> {
             if (!e.getValueIsAdjusting()) fileSelected(staging.stagedTable, staging.unstagedTable);
         });
@@ -906,6 +942,98 @@ public class RepoPanel extends JPanel {
         });
     }
 
+    // external tools
+
+    /** a temp copy of a version of a file, kept until the application ends (the tool may still read it) */
+    private static Path tempCopy(Path dir, String path, String label, byte[] content) throws java.io.IOException {
+        String name = Path.of(path).getFileName().toString();
+        int dot = name.lastIndexOf('.');
+        String file = dot > 0 ? name.substring(0, dot) + "." + label + name.substring(dot) : name + "." + label;
+        Path p = dir.resolve(file);
+        java.nio.file.Files.write(p, content != null ? content : new byte[0]);
+        p.toFile().deleteOnExit();
+        return p;
+    }
+
+    /**
+     * opens the external diff tool on a file.
+     *
+     * @param oldest null for the working copy file (staged: HEAD vs index, unstaged: index vs the working file)
+     */
+    private void externalDiff(FileChange f, String oldest, String newest) {
+        String command = vavi.apps.gitup.model.Settings.get().diffCommand();
+        if (command == null) {
+            showError(new IllegalStateException("choose an external diff tool in Settings (⌘,)"));
+            return;
+        }
+        String oldPath = f.oldPath() != null ? f.oldPath() : f.path();
+        exec.submit(() -> {
+            Path dir = java.nio.file.Files.createTempDirectory("gitup-diff-");
+            dir.toFile().deleteOnExit();
+            Path local, remote;
+            if (oldest != null) {
+                String base = repo.commitRow(oldest).parents().isEmpty() ? null : oldest + "^";
+                local = tempCopy(dir, oldPath, "LOCAL", base != null ? repo.contentAt(base, oldPath) : null);
+                remote = tempCopy(dir, f.path(), "REMOTE", repo.contentAt(newest, f.path()));
+            } else if (f.staged()) {
+                local = tempCopy(dir, oldPath, "HEAD", repo.isHeadUnborn() ? null : repo.contentAt("HEAD", oldPath));
+                remote = tempCopy(dir, f.path(), "INDEX", repo.indexContent(f.path(), 0));
+            } else {
+                byte[] index = repo.indexContent(oldPath, 0);
+                local = tempCopy(dir, oldPath, "INDEX", index);
+                Path file = workdir.resolve(f.path());
+                remote = java.nio.file.Files.exists(file) ? file : tempCopy(dir, f.path(), "DELETED", null);
+            }
+            return Map.of("LOCAL", local.toString(), "REMOTE", remote.toString());
+        }, env -> runTool("External Diff", command, env, null));
+    }
+
+    /** opens the external merge tool on a conflicted file, then offers to mark it resolved */
+    private void externalMerge(FileChange f) {
+        String command = vavi.apps.gitup.model.Settings.get().mergeCommand();
+        if (command == null) {
+            showError(new IllegalStateException("choose an external merge tool in Settings (⌘,)"));
+            return;
+        }
+        exec.submit(() -> {
+            Path dir = java.nio.file.Files.createTempDirectory("gitup-merge-");
+            dir.toFile().deleteOnExit();
+            return Map.of(
+                    "BASE", tempCopy(dir, f.path(), "BASE", repo.indexContent(f.path(), 1)).toString(),
+                    "LOCAL", tempCopy(dir, f.path(), "LOCAL", repo.indexContent(f.path(), 2)).toString(),
+                    "REMOTE", tempCopy(dir, f.path(), "REMOTE", repo.indexContent(f.path(), 3)).toString(),
+                    "MERGED", workdir.resolve(f.path()).toString());
+        }, env -> runTool("External Merge", command, env, () -> {
+            if (confirm("Did the merge of " + f.path() + " finish?\nStage it to mark the conflict resolved.", "External Merge")) {
+                exec.run(() -> repo.stage(List.of(new FileChange(f.path(), f.path(), FileChange.Kind.MODIFIED, false))), this::refreshStatus);
+            } else {
+                refreshStatus();
+            }
+        }));
+    }
+
+    /** runs a tool on its own thread, reports a failure, then runs after (on the EDT) */
+    private void runTool(String label, String command, Map<String, String> env, Runnable after) {
+        commandLog.add(command.replace("$LOCAL", env.getOrDefault("LOCAL", "")).replace("$REMOTE", env.getOrDefault("REMOTE", ""))
+                .replace("$BASE", env.getOrDefault("BASE", "")).replace("$MERGED", env.getOrDefault("MERGED", "")), label);
+        statusBar.setText(label + ": " + command);
+        Thread t = new Thread(() -> {
+            try {
+                Process p = vavi.apps.gitup.model.ExternalTool.launch(command, env, workdir);
+                String out = new String(p.getInputStream().readAllBytes());
+                int rc = p.waitFor();
+                SwingUtilities.invokeLater(() -> {
+                    if (rc != 0) showError(new IllegalStateException(label + " exited with " + rc + (out.isBlank() ? "" : ":\n" + out.strip())));
+                    if (after != null) after.run();
+                });
+            } catch (Exception e) {
+                SwingUtilities.invokeLater(() -> showError(e));
+            }
+        }, "external tool");
+        t.setDaemon(true);
+        t.start();
+    }
+
     // command history
 
     /** the equivalent git commands of what was done in this tab */
@@ -1466,8 +1594,12 @@ public class RepoPanel extends JPanel {
 
     // remote
 
+    /** urls a saved account was already tried for in the current remote operation */
+    private final java.util.Set<String> triedAccounts = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     /** runs a remote operation on the git thread with the GitUpKit transport, op returns a status message */
     private void remoteOp(String label, Function<RemoteOps, String> op) {
+        triedAccounts.clear();
         remoteActions.forEach(a -> a.setEnabled(false));
         statusBar.setText(label + "…");
         exec.submit(() -> {
@@ -1531,18 +1663,40 @@ public class RepoPanel extends JPanel {
     /** credential prompts, called on the git thread, shown on the EDT */
     private final RemoteOps.Prompter prompter = new RemoteOps.Prompter() {
         @Override public String[] userPassword(String url, String user) {
+            // a saved account first, once per operation (a wrong one would be asked for again and again)
+            if (triedAccounts.add(url)) {
+                try {
+                    vavi.apps.gitup.model.Accounts.Account a = vavi.apps.gitup.model.Accounts.get().find(url, user);
+                    String secret = a != null ? vavi.apps.gitup.model.Accounts.get().secret(a) : null;
+                    if (secret != null) return new String[] {a.username(), secret};
+                } catch (RuntimeException e) {
+                    logger.log(System.Logger.Level.WARNING, "account: " + e.getMessage(), e);
+                }
+            }
             String[][] result = new String[1][];
             invokeAndWait(() -> {
                 JTextField u = new JTextField(user != null ? user : "", 20);
                 JPasswordField p = new JPasswordField(20);
+                JCheckBox remember = new JCheckBox("Remember as an account (Keychain)", true);
                 JPanel panel = new JPanel(new GridLayout(0, 1));
                 panel.add(new JLabel(url));
                 panel.add(new JLabel("Username:"));
                 panel.add(u);
                 panel.add(new JLabel("Password / token:"));
                 panel.add(p);
+                panel.add(remember);
                 if (JOptionPane.showConfirmDialog(RepoPanel.this, panel, "Authentication", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) == JOptionPane.OK_OPTION) {
                     result[0] = new String[] {u.getText(), new String(p.getPassword())};
+                    String host = vavi.apps.gitup.model.Accounts.host(url);
+                    if (remember.isSelected() && host != null && !u.getText().isBlank()) {
+                        try {
+                            vavi.apps.gitup.model.Accounts.get().put(new vavi.apps.gitup.model.Accounts.Account(
+                                    vavi.apps.gitup.model.Accounts.Service.guess(host), host, u.getText().strip(),
+                                    vavi.apps.gitup.model.Accounts.Protocol.HTTPS), result[0][1]);
+                        } catch (RuntimeException e) {
+                            logger.log(System.Logger.Level.WARNING, "account: " + e.getMessage(), e);
+                        }
+                    }
                 }
             });
             return result[0];

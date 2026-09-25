@@ -246,9 +246,17 @@ public class GitRepo implements AutoCloseable {
 
     // diff
 
+    private int contextLines = 3;
+
+    /** lines of context around changes in the patches opened from now on */
+    public void setContextLines(int contextLines) {
+        this.contextLines = contextLines;
+    }
+
     private GitDiffOptions diffOptions(String path, boolean untracked) {
         GitDiffOptions o = new GitDiffOptions();
         git.git_diff_options_init(o, 1);
+        o.context_lines = contextLines;
         o.flags = GIT_DIFF_DISABLE_PATHSPEC_MATCH;
         if (untracked) o.flags |= GIT_DIFF_INCLUDE_UNTRACKED | GIT_DIFF_RECURSE_UNTRACKED_DIRS | GIT_DIFF_SHOW_UNTRACKED_CONTENT;
         o.pathspec = new GitStrarray();
@@ -1251,6 +1259,51 @@ public class GitRepo implements AutoCloseable {
                 if (!isHeadUnborn()) reset0(revparse("HEAD"), GIT_RESET_MIXED);
             }
             case REFS -> {}
+        }
+    }
+
+    // file contents (for external tools)
+
+    /** @return the content of "rev:path" (e.g. "HEAD:a.txt"), null when it does not exist there */
+    public byte[] contentAt(String rev, String path) {
+        PointerByReference op = new PointerByReference();
+        if (git.git_revparse_single(op, handle(), rev + ":" + path) != 0) return null;
+        try {
+            return blobContent(new GitOid(git.git_object_id(op.getValue())));
+        } finally {
+            git.git_object_free(op.getValue());
+        }
+    }
+
+    /**
+     * @param stage 0: the staged content, 1: base, 2: ours, 3: theirs of a conflict
+     * @return null when the index has no such entry
+     */
+    public byte[] indexContent(String path, int stage) {
+        Pointer index = index();
+        try {
+            Pointer entry;
+            if (stage == 0) {
+                entry = git.git_index_get_bypath(index, path, 0);
+            } else {
+                PointerByReference a = new PointerByReference(), o = new PointerByReference(), t = new PointerByReference();
+                if (git.git_index_conflict_get(a, o, t, index, path) != 0) return null;
+                entry = (stage == 1 ? a : stage == 2 ? o : t).getValue();
+            }
+            return entry == null ? null : blobContent(new GitOid(entry.share(INDEX_ENTRY_ID)));
+        } finally {
+            git.git_index_free(index);
+        }
+    }
+
+    private byte[] blobContent(GitOid id) {
+        PointerByReference bp = new PointerByReference();
+        check(git.git_blob_lookup(bp, handle(), id), "blob");
+        try {
+            long size = git.git_blob_rawsize(bp.getValue());
+            return size == 0 ? new byte[0] : git.git_blob_rawcontent(bp.getValue()).getByteArray(0, (int) size);
+        } finally {
+            git.git_blob_free(bp.getValue());
         }
     }
 

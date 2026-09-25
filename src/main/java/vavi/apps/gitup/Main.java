@@ -89,6 +89,10 @@ public class Main implements MainWindow.App {
         for (String a : args) {
             if (!a.isBlank()) paths.add(Path.of(a).toAbsolutePath().normalize());
         }
+        // the application menu's "Settings…"
+        if (java.awt.Desktop.isDesktopSupported() && java.awt.Desktop.getDesktop().isSupported(java.awt.Desktop.Action.APP_PREFERENCES)) {
+            java.awt.Desktop.getDesktop().setPreferencesHandler(e -> vavi.apps.gitup.ui.SettingsWindow.open());
+        }
         SwingUtilities.invokeLater(() -> new Main().start(paths));
     }
 
