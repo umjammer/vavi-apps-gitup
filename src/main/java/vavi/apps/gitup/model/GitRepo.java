@@ -998,6 +998,18 @@ public class GitRepo implements AutoCloseable {
         return local;
     }
 
+    /** @param upstream "remote/branch", the remote branch reference must exist (e.g. after a push) */
+    public void setUpstream(String localBranch, String upstream) {
+        cmd("git branch --set-upstream-to=" + q(upstream) + " " + q(localBranch));
+        PointerByReference bp = new PointerByReference();
+        check(git.git_branch_lookup(bp, handle(), localBranch, GIT_BRANCH_LOCAL), "branch " + localBranch);
+        try {
+            check(git.git_branch_set_upstream(bp.getValue(), upstream), "set upstream " + upstream);
+        } finally {
+            git.git_reference_free(bp.getValue());
+        }
+    }
+
     /** @return "remote/branch" of the upstream, null when not set */
     public String upstream(String localBranch) {
         PointerByReference bp = new PointerByReference();

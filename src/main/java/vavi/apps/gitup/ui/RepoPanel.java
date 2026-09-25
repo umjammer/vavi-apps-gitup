@@ -1660,12 +1660,40 @@ public class RepoPanel extends JPanel {
         });
     }
 
+    private record PushInfo(List<GitRepo.Remote> remotes, List<String> branches, Map<String, String> upstreams, String current) {}
+
+    /** SourceTree-like: asks the remote, the branches (remote names, tracking), tags and force, then pushes */
     private void push() {
-        remoteOp("Push", ops -> {
-            String branch = repo.headBranch();
-            if (branch == null || "HEAD".equals(branch)) throw new IllegalStateException("not on a branch");
-            ops.push(branch, repo.upstream(branch) != null);
-            return "done";
+        exec.submit(() -> {
+            List<String> branches = repo.refs().stream().filter(r -> r.kind() == Ref.Kind.LOCAL).map(Ref::shorthand).toList();
+            Map<String, String> upstreams = new HashMap<>();
+            for (String b : branches) {
+                String u = repo.upstream(b);
+                if (u != null) upstreams.put(b, u);
+            }
+            return new PushInfo(repo.remotes(), branches, upstreams, repo.headBranch());
+        }, info -> {
+            if (info.remotes().isEmpty()) {
+                showError(new IllegalStateException("no remote: add one with the sidebar's REMOTES ▸ New Remote…"));
+                return;
+            }
+            if (info.branches().isEmpty()) {
+                showError(new IllegalStateException("no branch to push"));
+                return;
+            }
+            PushDialog.Result r = new PushDialog(this, info.remotes(), info.branches(), info.upstreams(), info.current()).showDialog();
+            if (r == null) return;
+            if (r.force() && !confirm("Force push to " + r.remote() + "?\nCommits on the remote branches that are not here are lost.", "Force Push")) return;
+            List<vavi.apps.gitup.objc.RemoteOps.BranchPush> pushes = r.branches().stream()
+                    .map(b -> new vavi.apps.gitup.objc.RemoteOps.BranchPush(b.local(), b.remote())).toList();
+            remoteOp("Push", ops -> {
+                ops.pushBranches(r.remote(), pushes, r.tags(), r.force());
+                for (PushDialog.Branch b : r.branches()) {
+                    String upstream = r.remote() + "/" + b.remote();
+                    if (b.track() && !upstream.equals(info.upstreams().get(b.local()))) repo.setUpstream(b.local(), upstream);
+                }
+                return "pushed " + r.branches().size() + " branch(es)" + (r.tags() ? " and the tags" : "") + " to " + r.remote();
+            });
         });
     }
 

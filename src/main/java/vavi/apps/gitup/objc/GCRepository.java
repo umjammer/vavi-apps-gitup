@@ -70,6 +70,8 @@ public abstract class GCRepository extends NSObject {
 
     public abstract boolean pushLocalBranch_toRemote_force_setUpstream_error(GCBranch branch, GCRemote remote, boolean force, boolean setUpstream, ObjCObjectByReference error);
 
+    public abstract boolean pushAllTagsToRemote_force_error(GCRemote remote, boolean force, ObjCObjectByReference error);
+
     /** GCBranch / GCLocalBranch / GCRemoteBranch */
     public abstract static class GCBranch extends NSObject {
         public abstract String name();

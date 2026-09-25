@@ -83,6 +83,44 @@ class RemoteOpsTest {
         assertTrue(onMain.stream().allMatch(b -> b), "on the main thread: " + onMain);
     }
 
+    /** SourceTree's push dialog: other remote branch names, tags, force, tracking */
+    @Test
+    void pushBranchesTagsForce() throws Exception {
+        Path bare = dir.resolve("remote.git");
+        Path a = dir.resolve("a");
+        Files.createDirectories(bare);
+        sh(bare, "init", "-q", "--bare", "-b", "main");
+        sh(dir, "clone", "-q", bare.toString(), "a");
+        sh(a, "checkout", "-q", "-b", "main");
+        Files.writeString(a.resolve("f.txt"), "1\n");
+        sh(a, "add", "f.txt");
+        sh(a, "commit", "-q", "-m", "one");
+        sh(a, "tag", "v1");
+        sh(a, "branch", "topic");
+
+        try (RemoteOps ops = new RemoteOps(a, NO_PROMPT, System.err::println)) {
+            ops.pushBranches("origin", java.util.List.of(new RemoteOps.BranchPush("main", "main"),
+                    new RemoteOps.BranchPush("topic", "feature/topic")), true, false);
+        }
+        assertEquals(sh(a, "rev-parse", "main"), sh(bare, "rev-parse", "main"));
+        assertEquals(sh(a, "rev-parse", "topic"), sh(bare, "rev-parse", "feature/topic"));
+        assertEquals(sh(a, "rev-parse", "v1"), sh(bare, "rev-parse", "v1"));
+
+        try (GitRepo repo = new GitRepo(a)) {
+            repo.setUpstream("topic", "origin/feature/topic");
+            assertEquals("origin/feature/topic", repo.upstream("topic"));
+        }
+
+        // a rewritten main needs force
+        sh(a, "commit", "-q", "--amend", "-m", "one, amended");
+        try (RemoteOps ops = new RemoteOps(a, NO_PROMPT, System.err::println)) {
+            org.junit.jupiter.api.Assertions.assertThrows(vavi.apps.gitup.model.GitException.class,
+                    () -> ops.pushBranches("origin", java.util.List.of(new RemoteOps.BranchPush("main", "main")), false, false));
+            ops.pushBranches("origin", java.util.List.of(new RemoteOps.BranchPush("main", "main")), false, true);
+        }
+        assertEquals(sh(a, "rev-parse", "main"), sh(bare, "rev-parse", "main"));
+    }
+
     @Test
     void pushFetchPull() throws Exception {
         Path bare = dir.resolve("remote.git");

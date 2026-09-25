@@ -36,6 +36,7 @@ SourceTree-like git GUI (Swing) using [GitUp](https://gitup.co)'s `GitUpKit.fram
  * in the log: checkout (a branch at the commit or detached HEAD, optionally discarding local changes),
    merge (commit immediately or not, no fast-forward), cherry-pick (commit immediately or not, keeps the author,
    a merge commit against a chosen parent)
+ * push dialog like SourceTree: remote, branches to push (remote branch name, track), push all tags, force push
  * fetch / push (GitUpKit transport, ssh keys, credential prompts),
    pull (fast-forward, merge or rebase: "Pull with Rebase" or `pull.rebase`; on conflicts resolve, then commit / continue, or abort)
  * live refresh with FSEvents (changes to ignored files only are skipped)
@@ -75,6 +76,7 @@ without a repository the last session's tabs are restored, or the repository bro
  * "Edit Message" uses GitUp's `GCHistory` rewriting, the history is loaded only for that operation
  * GitUp's rewrites run without its conflict resolver UI: a rewrite that would conflict fails and changes nothing,
    GitUp does not swap with a root commit
+ * github credential needs "contents" and "workflow" both "rw" 
 
 ## References
 

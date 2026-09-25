@@ -83,7 +83,11 @@ public class RemoteOps implements AutoCloseable {
      * unrelated error (e.g. "config value 'http.followRedirects' was not found"), so say what happened.
      */
     private GitException transferError(String what, ObjCObjectByReference e) {
-        GitException ge = error(what, e);
+        return transferError(what, e.getValueAs(NSError.class));
+    }
+
+    private GitException transferError(String what, NSError error) {
+        GitException ge = new GitException(what + ": " + (error != null ? error.localizedDescription() : "unknown error"));
         if (delegate.authAsked > 0) {
             String hint = delegate.authUrl != null && delegate.authUrl.contains("github.com")
                     ? " GitHub does not accept account passwords, use a personal access token as the password." : "";
@@ -132,6 +136,58 @@ public class RemoteOps implements AutoCloseable {
                 ok = repo.pushLocalBranch_toRemote_force_setUpstream_error(branch, origin, false, true, e);
             }
             if (!ok) throw transferError("push " + localBranch, e);
+        } finally {
+            pool.drain();
+        }
+    }
+
+    /** a local branch and the name of the branch on the remote (SourceTree's push dialog) */
+    public record BranchPush(String localBranch, String remoteBranch) {}
+
+    /**
+     * {@code -[GCRepository _pushSourceReference:toRemote:destinationReference:force:error:]} takes
+     * C strings and a git_remote*, sent with a fixed prototype
+     */
+    interface PushMsgSend extends com.sun.jna.Library {
+        PushMsgSend INSTANCE = com.sun.jna.Native.load("objc", PushMsgSend.class,
+                java.util.Map.of(com.sun.jna.Library.OPTION_STRING_ENCODING, "UTF-8"));
+
+        com.sun.jna.Pointer sel_registerName(String name);
+
+        byte objc_msgSend(com.sun.jna.Pointer self, com.sun.jna.Pointer sel, String source, com.sun.jna.Pointer remote,
+                          String destination, byte force, com.sun.jna.ptr.PointerByReference error);
+    }
+
+    /**
+     * pushes local branches to (possibly differently named) branches of a remote, then all tags when asked.
+     * tracking is not set here (see {@code GitRepo#setUpstream}).
+     */
+    public void pushBranches(String remoteName, java.util.List<BranchPush> pushes, boolean tags, boolean force) {
+        delegate.reset();
+        NSAutoreleasePool pool = NSAutoreleasePool.new_();
+        try {
+            ObjCObjectByReference e = new ObjCObjectByReference();
+            GCRemote remote = repo.lookupRemoteWithName_error(remoteName, e);
+            if (remote == null) throw error("remote " + remoteName, e);
+            ID gitRemote = Foundation.sendReturnsID(remote.id(), "private"); // git_remote*
+            com.sun.jna.Pointer self = new com.sun.jna.Pointer(repo.id().longValue());
+            com.sun.jna.Pointer sel = PushMsgSend.INSTANCE.sel_registerName("_pushSourceReference:toRemote:destinationReference:force:error:");
+            for (BranchPush p : pushes) {
+                commandLog.add("git push " + (force ? "--force " : "") + vavi.apps.gitup.model.CommandLog.quote(remoteName) + " "
+                        + vavi.apps.gitup.model.CommandLog.quote(p.localBranch() + ":" + p.remoteBranch()), "GitUpKit transport");
+                com.sun.jna.ptr.PointerByReference err = new com.sun.jna.ptr.PointerByReference();
+                byte ok = PushMsgSend.INSTANCE.objc_msgSend(self, sel, "refs/heads/" + p.localBranch(),
+                        new com.sun.jna.Pointer(gitRemote.longValue()), "refs/heads/" + p.remoteBranch(), (byte) (force ? 1 : 0), err);
+                if (ok == 0) {
+                    NSError nsError = err.getValue() != null
+                            ? Rococoa.wrap(ID.fromLong(com.sun.jna.Pointer.nativeValue(err.getValue())), NSError.class) : null;
+                    throw transferError("push " + p.localBranch() + " to " + remoteName + "/" + p.remoteBranch(), nsError);
+                }
+            }
+            if (tags) {
+                commandLog.add("git push " + (force ? "--force " : "") + "--tags " + vavi.apps.gitup.model.CommandLog.quote(remoteName), "GitUpKit transport");
+                if (!repo.pushAllTagsToRemote_force_error(remote, force, e)) throw transferError("push tags to " + remoteName, e);
+            }
         } finally {
             pool.drain();
         }
