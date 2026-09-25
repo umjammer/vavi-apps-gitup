@@ -28,6 +28,9 @@ SourceTree-like git GUI (Swing) using [GitUp](https://gitup.co)'s `GitUpKit.fram
  * undo (⌘Z) / redo (⇧⌘Z) of commit, amend, pull, reset, branch deletion and history rewrites
    (branches and HEAD go back; a commit's changes come back staged), kept over restarts
  * GitUp's history rewriting in the log: edit message, edit author, squash / fixup into parent, move up / down, delete commit
+ * protect pushed commits (Settings › History, on by default): amend, edit message / author, squash, fixup, move, delete,
+   reset, undo / redo that would rewrite or drop commits already on a remote branch are stopped, overriding needs a checkbox
+   and a button (amend offers "Commit as New Commit"); the amend checkbox shows "(pushed)" when the last commit is pushed
  * conflicts while moving / deleting a commit are resolved like GitUp: the conflicted files are checked out
    (HEAD detached), use mine / theirs, external merge tool or edit and mark resolved, then continue (the author is kept) or abort (nothing changes)
  * branches / remotes / tags / stashes sidebar, checkout, new branch, stash / apply / pop / delete, show a stash's changes

@@ -1364,16 +1364,45 @@ public class GitRepo implements AutoCloseable {
 
     /** @return true when a remote branch contains the commit (rewriting it rewrites published history) */
     public boolean isPublished(String oid) {
-        GitOid c = new GitOid();
-        git.git_oid_fromstr(c, oid);
+        return !publishedIn(oid).isEmpty();
+    }
+
+    /** @return the remote branches (e.g. "origin/main") containing the commit, empty when it is not pushed */
+    public List<String> publishedIn(String oid) {
+        List<String> list = new ArrayList<>();
         for (Ref r : refs()) {
-            if (r.kind() != Ref.Kind.REMOTE || r.target() == null) continue;
-            if (r.target().equals(oid)) return true;
-            GitOid t = new GitOid();
-            git.git_oid_fromstr(t, r.target());
-            if (git.git_graph_descendant_of(handle(), t, c) == 1) return true;
+            if (r.kind() != Ref.Kind.REMOTE || r.target() == null || r.shorthand().endsWith("/HEAD")) continue;
+            if (contains(r.target(), oid)) list.add(r.shorthand());
         }
-        return false;
+        return list;
+    }
+
+    /** @return true when the commit {@code tip} is {@code oid} or descends from it */
+    public boolean contains(String tip, String oid) {
+        if (tip.equals(oid)) return true;
+        GitOid t = new GitOid(), c = new GitOid();
+        git.git_oid_fromstr(t, tip);
+        git.git_oid_fromstr(c, oid);
+        return git.git_graph_descendant_of(handle(), t, c) == 1;
+    }
+
+    /**
+     * the pushed commits a move of local branches would drop from them (reset, undo): a branch whose
+     * current tip is pushed and whose new tip does not contain it.
+     *
+     * @param newTips full branch name ("refs/heads/main") → new tip
+     * @return branch shorthand → the remote branches containing its current tip, empty when nothing pushed is dropped
+     */
+    public Map<String, List<String>> droppedPublished(Map<String, String> newTips) {
+        Map<String, List<String>> dropped = new java.util.LinkedHashMap<>();
+        for (Ref r : refs()) {
+            if (r.kind() != Ref.Kind.LOCAL || r.target() == null) continue;
+            String tip = newTips.get(r.name());
+            if (tip == null || tip.equals(r.target()) || contains(tip, r.target())) continue;
+            List<String> remotes = publishedIn(r.target());
+            if (!remotes.isEmpty()) dropped.put(r.shorthand(), remotes);
+        }
+        return dropped;
     }
 
     /**

@@ -74,7 +74,10 @@ class SettingsTest {
         assertEquals("mytool $LOCAL $REMOTE", s.diffCommand());
         s.setMergeTool(ExternalTool.CUSTOM, "  ");
         assertNull(s.mergeCommand());
-        assertEquals(5, changes[0]);
+        assertTrue(s.protectPushed(), "on by default");
+        s.setProtectPushed(false);
+        assertFalse(new Settings(prefs).protectPushed());
+        assertEquals(6, changes[0]);
     }
 
     @Test

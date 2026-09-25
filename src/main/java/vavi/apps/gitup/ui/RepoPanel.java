@@ -334,6 +334,16 @@ public class RepoPanel extends JPanel {
             exec.run(() -> repo.unstage(all), this::refreshStatus);
         });
         staging.amendBox.addActionListener(e -> {
+            if (staging.amendBox.isSelected() && !staging.headPushed().isEmpty()) {
+                exec.submit(() -> Map.entry(repo.headOid(), repo.publishedIn(repo.headOid())), head -> {
+                    if (!staging.amendBox.isSelected()) return;
+                    if (PushedGuard.allow(this, "Amend", "The last commit " + head.getKey().substring(0, 7), head.getValue())) {
+                        amendAllowedFor = head.getKey();
+                    } else {
+                        staging.amendBox.setSelected(false);
+                    }
+                });
+            }
             if (staging.amendBox.isSelected() && staging.message.getText().isBlank()) {
                 exec.submit(() -> repo.headMessage(), m -> {
                     if (m != null && staging.message.getText().isBlank()) staging.message.setText(m.strip());
@@ -546,6 +556,7 @@ public class RepoPanel extends JPanel {
     }
 
     private void applyStatus(Status s, GitRepo.State state) {
+        exec.submit(() -> repo.isHeadUnborn() ? List.<String>of() : repo.publishedIn(repo.headOid()), staging::setHeadPushed);
         adjusting = true;
         try {
             staging.stagedTable.setFiles(s.staged());
@@ -782,6 +793,35 @@ public class RepoPanel extends JPanel {
             JOptionPane.showMessageDialog(this, "Nothing is staged.", "Commit", JOptionPane.INFORMATION_MESSAGE);
             return;
         }
+        if (!amend) {
+            commit(message, false);
+            return;
+        }
+        // amending a pushed commit rewrites published history
+        exec.submit(() -> Map.entry(repo.headOid(), repo.publishedIn(repo.headOid())), head -> {
+            if (head.getKey().equals(amendAllowedFor)) {
+                commit(message, true);
+                return;
+            }
+            switch (PushedGuard.ask(this, "Amend", "The last commit " + head.getKey().substring(0, 7), head.getValue(), true)) {
+                case REWRITE -> commit(message, true);
+                case NEW_COMMIT -> {
+                    if (staging.stagedTable.getFiles().isEmpty() && !merging) {
+                        JOptionPane.showMessageDialog(this, "Nothing is staged.", "Commit", JOptionPane.INFORMATION_MESSAGE);
+                        return;
+                    }
+                    staging.amendBox.setSelected(false);
+                    commit(message, false);
+                }
+                case CANCEL -> {}
+            }
+        });
+    }
+
+    /** the HEAD the user allowed to amend although pushed (asked when the amend box was checked) */
+    private String amendAllowedFor;
+
+    private void commit(String message, boolean amend) {
         exec.submit(() -> {
             GitRepo.RefSnapshot snapshot = repo.snapshotRefs(amend ? "Amend" : "Commit", true);
             String oid = amend ? repo.amend(message + "\n") : repo.commit(message + "\n");
@@ -795,6 +835,7 @@ public class RepoPanel extends JPanel {
             }
             staging.message.setText("");
             staging.amendBox.setSelected(false);
+            amendAllowedFor = null;
             statusBar.setText((amend ? "Amended " : "Committed ") + oid.substring(0, 7));
             currentFile = null;
             refreshAll(true);
@@ -912,6 +953,12 @@ public class RepoPanel extends JPanel {
     private void redo() {
         GitRepo.RefSnapshot r = redoStack.peekLast();
         if (r == null) return;
+        exec.submit(() -> repo.droppedPublished(r.branches()), dropped -> {
+            if (allowDropping("Redo " + r.label(), dropped)) redo(r);
+        });
+    }
+
+    private void redo(GitRepo.RefSnapshot r) {
         exec.submit(() -> {
             GitRepo.RefSnapshot back = repo.snapshotRefs(r.label(), r.restore());
             repo.restore(r);
@@ -930,6 +977,12 @@ public class RepoPanel extends JPanel {
         String what = s.soft() ? "\nThe committed changes come back as staged changes."
                 : "\nThe index and the working copy are reset to the restored HEAD.";
         if (!confirm("Undo " + s.label() + "?\nHEAD and the local branches go back to where they were." + what, "Undo")) return;
+        exec.submit(() -> repo.droppedPublished(s.branches()), dropped -> {
+            if (allowDropping("Undo " + s.label(), dropped)) undo(s);
+        });
+    }
+
+    private void undo(GitRepo.RefSnapshot s) {
         exec.submit(() -> {
             GitRepo.RefSnapshot forward = repo.snapshotRefs(s.label(), s.restore());
             repo.restore(s);
@@ -1134,11 +1187,12 @@ public class RepoPanel extends JPanel {
 
     /** GitUp's "Edit Message": the commit and its descendants are rewritten with the same trees */
     private void editMessage(CommitRow c) {
-        exec.submit(() -> Map.entry(repo.isPublished(c.oid()), repo.state()), info -> {
+        exec.submit(() -> Map.entry(repo.publishedIn(c.oid()), repo.state()), info -> {
             if (info.getValue() != GitRepo.State.NONE) {
                 showError(new IllegalStateException("finish or abort the merge in progress first"));
                 return;
             }
+            if (!PushedGuard.allow(this, "Edit Message", "The commit " + c.shortOid(), info.getKey())) return;
             javax.swing.JTextArea text = new javax.swing.JTextArea(c.message().strip(), 8, 60);
             text.setFont(staging.message.getFont());
             text.setLineWrap(true);
@@ -1146,11 +1200,6 @@ public class RepoPanel extends JPanel {
             JPanel p = new JPanel(new BorderLayout(0, 6));
             p.add(new JLabel("New commit message for " + c.shortOid() + ":"), BorderLayout.NORTH);
             p.add(new JScrollPane(text), BorderLayout.CENTER);
-            if (info.getKey()) {
-                JLabel warn = new JLabel("<html><font color='#bc4c00'>This commit is on a remote branch already.<br>"
-                        + "Rewriting it changes published history, others will need to reconcile.</font></html>");
-                p.add(warn, BorderLayout.SOUTH);
-            }
             if (JOptionPane.showConfirmDialog(this, p, "Edit Message", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) return;
             String message = text.getText().strip();
             if (message.isEmpty() || message.equals(c.message().strip())) return;
@@ -1172,11 +1221,12 @@ public class RepoPanel extends JPanel {
 
     /** replaces the author of a commit, the commit and its descendants are rewritten with the same trees */
     private void editAuthor(CommitRow c) {
-        exec.submit(() -> Map.entry(repo.isPublished(c.oid()), repo.state()), info -> {
+        exec.submit(() -> Map.entry(repo.publishedIn(c.oid()), repo.state()), info -> {
             if (info.getValue() != GitRepo.State.NONE) {
                 showError(new IllegalStateException("finish or abort the merge in progress first"));
                 return;
             }
+            if (!PushedGuard.allow(this, "Edit Author", "The commit " + c.shortOid(), info.getKey())) return;
             JTextField name = new JTextField(c.author(), 30);
             JTextField email = new JTextField(c.email(), 30);
             JPanel fields = new JPanel(new GridLayout(0, 2, 6, 4));
@@ -1187,11 +1237,6 @@ public class RepoPanel extends JPanel {
             JPanel p = new JPanel(new BorderLayout(0, 6));
             p.add(new JLabel("New author of " + c.shortOid() + " \"" + c.summary() + "\":"), BorderLayout.NORTH);
             p.add(fields, BorderLayout.CENTER);
-            if (info.getKey()) {
-                JLabel warn = new JLabel("<html><font color='#bc4c00'>This commit is on a remote branch already.<br>"
-                        + "Rewriting it changes published history, others will need to reconcile.</font></html>");
-                p.add(warn, BorderLayout.SOUTH);
-            }
             if (JOptionPane.showConfirmDialog(this, p, "Edit Author", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) return;
             String n = name.getText().strip(), m = email.getText().strip();
             if (n.isEmpty() || m.isEmpty() || (n.equals(c.author()) && m.equals(c.email()))) return;
@@ -1325,9 +1370,13 @@ public class RepoPanel extends JPanel {
         exec.submit(() -> {
             Status st = repo.status();
             boolean clean = st.staged().isEmpty() && st.unstaged().stream().allMatch(f -> f.kind() == FileChange.Kind.UNTRACKED);
-            return new Object[] {repo.isPublished(c.oid()), repo.state(), clean, c.parents().isEmpty() ? null : repo.commitRow(c.parents().getFirst())};
+            // squash, fixup and move down rewrite the parent too
+            boolean parentToo = r == LogPanel.Rewrite.SQUASH || r == LogPanel.Rewrite.FIXUP || r == LogPanel.Rewrite.MOVE_DOWN;
+            String oldest = parentToo && !c.parents().isEmpty() ? c.parents().getFirst() : c.oid();
+            return new Object[] {repo.publishedIn(oldest), repo.state(), clean, c.parents().isEmpty() ? null : repo.commitRow(c.parents().getFirst()), oldest};
         }, info -> {
-            boolean published = (Boolean) info[0];
+            @SuppressWarnings("unchecked")
+            List<String> pushed = (List<String>) info[0];
             if (info[1] != GitRepo.State.NONE) {
                 showError(new IllegalStateException("finish or abort the merge / rebase in progress first"));
                 return;
@@ -1337,7 +1386,15 @@ public class RepoPanel extends JPanel {
                 return;
             }
             CommitRow parent = (CommitRow) info[3];
-            String warning = published ? "\n\nThis commit is on a remote branch already, this rewrites published history." : "";
+            String action = switch (r) {
+                case SQUASH -> "Squash";
+                case FIXUP -> "Fixup";
+                case MOVE_UP -> "Move Up";
+                case MOVE_DOWN -> "Move Down";
+                case DELETE -> "Delete";
+            };
+            String oldest = (String) info[4];
+            if (!PushedGuard.allow(this, action, "The commit " + oldest.substring(0, 7), pushed)) return;
             String message;
             switch (r) {
                 case SQUASH -> {
@@ -1345,20 +1402,17 @@ public class RepoPanel extends JPanel {
                     javax.swing.JTextArea text = new javax.swing.JTextArea(parent.message().strip() + "\n\n" + c.message().strip(), 10, 60);
                     text.setFont(staging.message.getFont());
                     JPanel p = new JPanel(new BorderLayout(0, 6));
-                    p.add(new JLabel("Squashed commit message:" + (published ? " (published history)" : "")), BorderLayout.NORTH);
+                    p.add(new JLabel("Squashed commit message:"), BorderLayout.NORTH);
                     p.add(new JScrollPane(text), BorderLayout.CENTER);
                     if (JOptionPane.showConfirmDialog(this, p, "Squash Into Parent", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) return;
                     message = text.getText().strip();
                     if (message.isEmpty()) return;
                 }
                 case DELETE -> {
-                    if (!confirm("Delete the commit " + c.shortOid() + " \"" + c.summary() + "\"?\nLater commits are replayed without it." + warning, "Delete Commit")) return;
+                    if (!confirm("Delete the commit " + c.shortOid() + " \"" + c.summary() + "\"?\nLater commits are replayed without it.", "Delete Commit")) return;
                     message = null;
                 }
-                default -> {
-                    if (published && !confirm("Rewrite " + c.shortOid() + "?" + warning, "Rewrite")) return;
-                    message = null;
-                }
+                default -> message = null;
             }
             String label = switch (r) {
                 case SQUASH -> "Squashed";
@@ -1685,6 +1739,22 @@ public class RepoPanel extends JPanel {
                 && !confirm("A hard reset discards all uncommitted changes of the working copy.\nThey cannot be recovered, even by undo.", "Reset (Hard)")) {
             return;
         }
+        // moving the branch behind pushed commits drops them from it
+        exec.submit(() -> headBranch == null ? Map.<String, List<String>>of() : repo.droppedPublished(Map.of("refs/heads/" + headBranch, c.oid())), dropped -> {
+            if (!allowDropping("Reset", dropped)) return;
+            reset(c, branch, type, undoMode);
+        });
+    }
+
+    /** asks when moving local branches would drop pushed commits from them */
+    private boolean allowDropping(String action, Map<String, List<String>> dropped) {
+        if (dropped.isEmpty()) return true;
+        String branches = String.join(", ", dropped.keySet());
+        List<String> remotes = dropped.values().stream().flatMap(List::stream).distinct().toList();
+        return PushedGuard.allow(this, action, "The tip of " + branches, remotes);
+    }
+
+    private void reset(CommitRow c, String branch, int type, GitRepo.Restore undoMode) {
         exec.submit(() -> {
             if (repo.state() != GitRepo.State.NONE) throw new IllegalStateException("finish or abort the merge / rebase in progress first");
             GitRepo.RefSnapshot snapshot = repo.snapshotRefs("Reset", undoMode);

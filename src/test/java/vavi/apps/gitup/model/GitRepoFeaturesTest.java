@@ -13,6 +13,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.List;
+import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
@@ -258,6 +259,37 @@ class GitRepoFeaturesTest {
             CommitRow r = repo.commitRow(head);
             assertEquals("b: two", r.summary());
             assertEquals(List.of(first), r.parents());
+        }
+    }
+
+    /** protect pushed commits: where a commit is pushed, which branch moves drop pushed commits */
+    @Test
+    void pushedCommits() throws Exception {
+        Path b = setupClone();
+        commitInB(b, 2, "two");
+        try (GitRepo repo = new GitRepo(b)) {
+            String head = repo.headOid();
+            String first = repo.revparse("HEAD~1");
+            assertEquals(List.of(), repo.publishedIn(head));
+            assertEquals(List.of("origin/main"), repo.publishedIn(first), "origin/HEAD is not listed");
+            assertTrue(repo.contains(head, first));
+            assertFalse(repo.contains(first, head));
+
+            // resetting main to origin/main drops only the unpushed commit
+            assertEquals(Map.of(), repo.droppedPublished(Map.of("refs/heads/main", first)));
+        }
+        sh(b, "push", "-q");
+        try (GitRepo repo = new GitRepo(b)) {
+            String head = repo.headOid();
+            String first = repo.revparse("HEAD~1");
+            assertEquals(Map.of("main", List.of("origin/main")), repo.droppedPublished(Map.of("refs/heads/main", first)));
+            assertEquals(Map.of(), repo.droppedPublished(Map.of("refs/heads/main", head)), "not moved");
+            assertEquals(Map.of(), repo.droppedPublished(Map.of("refs/heads/other", first)), "no such branch");
+        }
+        commitInB(b, 3, "three");
+        try (GitRepo repo = new GitRepo(b)) {
+            // forward (the new tip contains the pushed tip) drops nothing
+            assertEquals(Map.of(), repo.droppedPublished(Map.of("refs/heads/main", repo.headOid())));
         }
     }
 

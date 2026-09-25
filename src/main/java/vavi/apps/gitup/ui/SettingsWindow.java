@@ -77,6 +77,7 @@ public class SettingsWindow extends JFrame {
         JTabbedPane tabs = new JTabbedPane();
         tabs.addTab("Accounts", accountsTab());
         tabs.addTab("Diff", diffTab());
+        tabs.addTab("History", historyTab());
         setContentPane(tabs);
         WindowState.remember(this, "settings", new Dimension(720, 460));
     }
@@ -352,6 +353,27 @@ public class SettingsWindow extends JFrame {
     }
 
     // diff
+
+    // history
+
+    private JComponent historyTab() {
+        javax.swing.JCheckBox protect = new javax.swing.JCheckBox("Protect pushed commits", settings.protectPushed());
+        protect.addActionListener(e -> settings.setProtectPushed(protect.isSelected()));
+        JLabel note = new JLabel("<html>Amend, edit message / author, squash, fixup, move, delete, reset and undo of commits<br>"
+                + "already on a remote branch are stopped: overriding needs an explicit confirmation.<br>"
+                + "Off: they only warn. (A rewritten pushed commit needs a force push, others must reconcile.)</html>");
+        note.setBorder(BorderFactory.createEmptyBorder(4, 24, 0, 0));
+        JPanel p = new JPanel();
+        p.setLayout(new javax.swing.BoxLayout(p, javax.swing.BoxLayout.Y_AXIS));
+        p.setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
+        protect.setAlignmentX(0);
+        note.setAlignmentX(0);
+        p.add(protect);
+        p.add(note);
+        JPanel north = new JPanel(new BorderLayout());
+        north.add(p, BorderLayout.NORTH);
+        return north;
+    }
 
     private JComponent diffTab() {
         JPanel colors = new JPanel(new GridBagLayout());

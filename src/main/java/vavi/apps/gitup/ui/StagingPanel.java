@@ -11,6 +11,7 @@ import java.awt.CardLayout;
 import java.awt.Font;
 import java.awt.event.ActionEvent;
 import java.awt.event.KeyEvent;
+import java.util.List;
 import javax.swing.AbstractAction;
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
@@ -150,6 +151,28 @@ public class StagingPanel extends JPanel {
         unstagedLabel.setText("Unstaged files (" + unstaged + ")");
         stageAllButton.setEnabled(unstaged > 0);
         unstageAllButton.setEnabled(staged > 0);
+    }
+
+    /** the remote branches containing HEAD, amending it rewrites pushed history */
+    private List<String> headPushed = List.of();
+
+    /** marks the amend checkbox when the last commit is already pushed */
+    public void setHeadPushed(List<String> remotes) {
+        headPushed = remotes;
+        if (remotes.isEmpty()) {
+            amendBox.setText("Amend last commit");
+            amendBox.setForeground(javax.swing.UIManager.getColor("CheckBox.foreground"));
+            amendBox.setToolTipText("Replace the last commit with the staged files and this message");
+        } else {
+            amendBox.setText("Amend last commit (pushed)");
+            amendBox.setForeground(new java.awt.Color(0xbc4c00));
+            amendBox.setToolTipText("The last commit is already on " + String.join(", ", remotes)
+                    + ": amending it rewrites pushed history (needs a force push)");
+        }
+    }
+
+    public List<String> headPushed() {
+        return headPushed;
     }
 
     /** shows the merge / rebase banner, disables amend (and commit while rebasing) */

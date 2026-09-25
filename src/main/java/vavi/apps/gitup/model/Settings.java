@@ -121,6 +121,16 @@ public final class Settings {
         return id.equals(ExternalTool.CUSTOM) ? blankToNull(customMergeCommand()) : ExternalTool.preset(id).merge();
     }
 
+    /** true (default): amend, history rewrites, reset and undo of commits already pushed ask for an explicit override */
+    public boolean protectPushed() {
+        return prefs.getBoolean("history.protectPushed", true);
+    }
+
+    public void setProtectPushed(boolean protect) {
+        prefs.putBoolean("history.protectPushed", protect);
+        changed();
+    }
+
     private static String blankToNull(String s) {
         return s == null || s.isBlank() ? null : s;
     }
