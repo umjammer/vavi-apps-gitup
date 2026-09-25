@@ -45,6 +45,7 @@ SourceTree-like git GUI (Swing) using [GitUp](https://gitup.co)'s `GitUpKit.fram
  * in the log: checkout (a branch at the commit or detached HEAD, optionally discarding local changes),
    merge (commit immediately or not, no fast-forward), cherry-pick (commit immediately or not, keeps the author,
    a merge commit against a chosen parent)
+ * toolbar count badges like SourceTree: commits behind on Pull, ahead on Push (against the upstream, as of the last fetch)
  * push dialog like SourceTree: remote, branches to push (remote branch name, track), push all tags, force push
  * fetch / push (GitUpKit transport, ssh keys, credential prompts),
    pull (fast-forward, merge or rebase: "Pull with Rebase" or `pull.rebase`; on conflicts resolve, then commit / continue, or abort)

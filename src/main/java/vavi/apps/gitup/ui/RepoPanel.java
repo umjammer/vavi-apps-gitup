@@ -406,6 +406,25 @@ public class RepoPanel extends JPanel {
             fetchAction, IconProvider.Key.FETCH, branchAction, IconProvider.Key.BRANCH, stashAction, IconProvider.Key.STASH,
             discardAction, IconProvider.Key.DISCARD, refreshAction, IconProvider.Key.REFRESH);
 
+    /** the toolbar buttons that show SourceTree's count badges */
+    private JButton pullButton, pushButton;
+    private static final String PLAIN_ICON = "gitup.plainIcon";
+
+    /** behind on Pull, ahead on Push (as of the last fetch), like SourceTree */
+    private void setBadges(GitRepo.AheadBehind ab) {
+        int behind = ab != null ? ab.behind() : 0, ahead = ab != null ? ab.ahead() : 0;
+        String upstream = ab != null ? ab.upstream() : null;
+        badge(pullButton, behind, behind + " commit" + (behind == 1 ? "" : "s") + " behind " + upstream, pullAction);
+        badge(pushButton, ahead, ahead + " commit" + (ahead == 1 ? "" : "s") + " ahead of " + upstream, pushAction);
+    }
+
+    private static void badge(JButton b, int count, String what, Action a) {
+        if (b == null) return;
+        if (b.getClientProperty(PLAIN_ICON) instanceof javax.swing.Icon plain) b.setIcon(vavi.apps.gitup.ui.icons.BadgeIcon.of(plain, count));
+        String tip = (String) a.getValue(Action.SHORT_DESCRIPTION);
+        b.setToolTipText(count > 0 ? "<html>" + tip + "<br>" + what + " (as of the last fetch)</html>" : tip);
+    }
+
     private JToolBar buildToolBar() {
         JToolBar bar = new JToolBar();
         bar.setFloatable(false);
@@ -419,7 +438,10 @@ public class RepoPanel extends JPanel {
             b.setFocusable(false);
             IconProvider.Key key = toolbarIcons.get(a);
             javax.swing.Icon icon = key != null ? IconProvider.get().icon(key, 24) : null;
+            if (a == pullAction) pullButton = b;
+            if (a == pushAction) pushButton = b;
             if (icon != null) {
+                b.putClientProperty(PLAIN_ICON, icon);
                 b.setIcon(icon);
                 b.setVerticalTextPosition(javax.swing.SwingConstants.BOTTOM);
                 b.setHorizontalTextPosition(javax.swing.SwingConstants.CENTER);
@@ -490,7 +512,7 @@ public class RepoPanel extends JPanel {
 
     private record Snapshot(Status status, List<Ref> refs, Map<String, List<Ref>> byTarget, String head,
                             GitRepo.State state, List<Stash> stashes, List<GitRepo.Remote> remotes,
-                            CommitLog log, List<CommitRow> page, boolean more) {}
+                            CommitLog log, List<CommitRow> page, boolean more, GitRepo.AheadBehind aheadBehind) {}
 
     /**
      * reloads refs, status and stashes; the log is rebuilt when refs, HEAD or
@@ -514,13 +536,14 @@ public class RepoPanel extends JPanel {
             }
             Map<String, List<Ref>> byTarget = new HashMap<>();
             for (Ref r : refs) if (r.target() != null) byTarget.computeIfAbsent(r.target(), k -> new ArrayList<>()).add(r);
-            return new Snapshot(status, refs, byTarget, head, repo.state(), repo.stashes(), repo.remotes(), log, page, more);
+            return new Snapshot(status, refs, byTarget, head, repo.state(), repo.stashes(), repo.remotes(), log, page, more, repo.aheadBehind());
         }, s -> {
             headBranch = s.head();
             host.titleChanged(this);
             remotes = s.remotes();
             sidebar.setRefs(s.refs(), s.remotes(), headBranch);
             sidebar.setStashes(s.stashes());
+            setBadges(s.aheadBehind());
             applyStatus(s.status(), s.state());
             if (s.page() == null) return; // log unchanged
             shownLog = s.log();
