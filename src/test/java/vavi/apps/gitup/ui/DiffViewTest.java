@@ -116,7 +116,8 @@ class DiffViewTest {
                 view.setFont(small);
                 view.setPatch(patch, DiffView.Mode.UNSTAGED, null);
                 int line = view.getFontMetrics(small).getHeight() + 2;
-                int header = view.getFontMetrics(small.deriveFont(12f)).getHeight() + 2;
+                java.awt.Font ui = javax.swing.UIManager.getFont("Button.font");
+                int header = view.getFontMetrics(ui.deriveFont(Math.max(12f, ui.getSize2D()))).getHeight() + 2;
                 assertTrue(header > line);
                 int h1 = patch.hunkRow(1);
                 assertEquals(header, view.rowHeight(h1));
