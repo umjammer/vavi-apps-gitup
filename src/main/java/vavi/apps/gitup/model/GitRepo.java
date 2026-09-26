@@ -1494,6 +1494,33 @@ public class GitRepo implements AutoCloseable {
         }
     }
 
+    /** a name, an email and a time with the time zone of the one who signed */
+    public record Signature(String name, String email, java.time.ZonedDateTime time) {}
+
+    /** the author and the committer of a commit */
+    public record Signatures(Signature author, Signature committer) {}
+
+    public Signatures signatures(String oid) {
+        Pointer c = lookupCommit(oid);
+        try {
+            return new Signatures(signature(git.git_commit_author(c)), signature(git.git_commit_committer(c)));
+        } finally {
+            git.git_commit_free(c);
+        }
+    }
+
+    private static Signature signature(Pointer p) {
+        vavi.apps.gitup.jna.Structs.GitSignature sig = new vavi.apps.gitup.jna.Structs.GitSignature(p);
+        java.time.ZoneOffset offset;
+        try {
+            offset = java.time.ZoneOffset.ofTotalSeconds(sig.when.offset * 60);
+        } catch (java.time.DateTimeException e) {
+            offset = java.time.ZoneOffset.UTC;
+        }
+        return new Signature(sig.name != null ? sig.name : "", sig.email != null ? sig.email : "",
+                java.time.Instant.ofEpochSecond(sig.when.time).atZone(offset));
+    }
+
     // stash
 
     /** a stash entry, index 0 is the newest */

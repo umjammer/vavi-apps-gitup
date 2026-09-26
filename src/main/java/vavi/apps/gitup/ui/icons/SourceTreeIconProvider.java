@@ -128,6 +128,7 @@ public class SourceTreeIconProvider implements IconProvider {
             case LABEL_BRANCH -> "LogViewBranch";
             case LABEL_HEAD -> "Current Checkout";
             case LABEL_TAG -> "LogViewTag";
+            case AVATAR -> "mysteryman.tiff";
             case PREFS_GENERAL -> "Prefs - General";
             case PREFS_ACCOUNTS -> "Prefs - Accounts";
             case PREFS_DIFF -> "Prefs - Diff";

@@ -341,6 +341,10 @@ public class RepoPanel extends JPanel {
             List<FileChange> sel = staging.commitTable.selectedFiles();
             if (sel.size() == 1 && selectedCommit != null) showCommitFile(rangeOldest, selectedCommit, sel.getFirst());
         });
+        staging.commitInfo.setParentListener(oid -> {
+            pendingReveal = null;
+            revealCommit(oid);
+        });
         staging.commitButton.addActionListener(e -> commit());
         staging.stageAllButton.addActionListener(e -> {
             List<FileChange> all = staging.unstagedTable.getFiles();
@@ -679,8 +683,9 @@ public class RepoPanel extends JPanel {
         showingWorking = false;
         selectedCommit = c.oid();
         rangeOldest = c.oid();
-        staging.showCommit(c);
+        staging.showCommit(c, logPanel.refsOf(c.oid()), logPanel.headBranch(), gitHubRemote());
         String oid = c.oid();
+        exec.submit(() -> repo.signatures(oid), sigs -> staging.commitInfo.setSignatures(oid, sigs));
         exec.submit(() -> repo.commitFiles(oid), files -> {
             if (!oid.equals(selectedCommit)) return;
             adjusting = true;
@@ -697,6 +702,17 @@ public class RepoPanel extends JPanel {
                 setDiff(null, DiffView.Mode.COMMIT, "No changes");
             }
         });
+    }
+
+    /** the URL of a github.com remote ("origin" first) for the avatars, null when none */
+    private String gitHubRemote() {
+        String url = null;
+        for (GitRepo.Remote r : remotes) {
+            if (vavi.apps.gitup.model.Avatars.gitHubCommit(r.url(), "") == null) continue;
+            if (r.name().equals("origin")) return r.url();
+            if (url == null) url = r.url();
+        }
+        return url;
     }
 
     /** several commits: the files changed over the whole range, like SourceTree */
@@ -1248,8 +1264,13 @@ public class RepoPanel extends JPanel {
     /** selects the commit of the hit (loading log pages until it appears), then its file and line */
     private void reveal(Hit hit) {
         pendingReveal = hit;
+        revealCommit(hit.oid());
+    }
+
+    /** selects the commit, loading log pages until it appears */
+    private void revealCommit(String oid) {
         logPanel.getTable().clearSelection(); // re-selecting the same commit reloads its files
-        if (logPanel.select(hit.oid())) return;
+        if (logPanel.select(oid)) return;
         exec.submit(() -> {
             if (log == null) return null;
             List<CommitRow> more = new ArrayList<>();
@@ -1257,12 +1278,12 @@ public class RepoPanel extends JPanel {
             while (!found && !log.isDone()) {
                 List<CommitRow> page = log.next(PAGE);
                 more.addAll(page);
-                found = page.stream().anyMatch(r -> r.oid().equals(hit.oid()));
+                found = page.stream().anyMatch(r -> r.oid().equals(oid));
             }
             return new Page(log, more, !log.isDone());
         }, p -> {
             if (p != null && p.log() == shownLog) logPanel.append(p.rows(), p.more());
-            if (!logPanel.select(hit.oid())) statusBar.setText("not in the log: " + hit.oid().substring(0, 7));
+            if (!logPanel.select(oid)) statusBar.setText("not in the log: " + oid.substring(0, 7));
         });
     }
 

@@ -384,12 +384,18 @@ public class SettingsWindow extends JFrame {
         spell.addActionListener(e -> settings.setSpellCheck(spell.isSelected()));
         JLabel spellNote = new JLabel("<html><font color='gray'>macOS's spell checker (its languages and learned words), "
                 + "right click a word for guesses</font></html>");
-        spellNote.setBorder(BorderFactory.createEmptyBorder(0, 28, 0, 0));
+        spellNote.setBorder(BorderFactory.createEmptyBorder(0, 28, 8, 0));
+
+        javax.swing.JCheckBox avatars = new javax.swing.JCheckBox("Show avatars in commit details", settings.avatars());
+        avatars.addActionListener(e -> settings.setAvatars(avatars.isSelected()));
+        JLabel avatarsNote = new JLabel("<html><font color='gray'>from GitHub (the commits of a github.com remote, noreply emails), "
+                + "then Gravatar (a hash of the email)</font></html>");
+        avatarsNote.setBorder(BorderFactory.createEmptyBorder(0, 28, 0, 0));
 
         JPanel p = new JPanel();
         p.setLayout(new javax.swing.BoxLayout(p, javax.swing.BoxLayout.Y_AXIS));
         p.setBorder(BorderFactory.createEmptyBorder(12, 8, 12, 12));
-        for (JComponent c : new JComponent[] {fetchRow, fetchNote, spell, spellNote}) {
+        for (JComponent c : new JComponent[] {fetchRow, fetchNote, spell, spellNote, avatars, avatarsNote}) {
             c.setAlignmentX(0);
             p.add(c);
         }

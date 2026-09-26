@@ -175,6 +175,16 @@ public final class Settings {
         changed();
     }
 
+    /** SourceTree's avatars in the commit details: GitHub (the remote's commits, noreply emails) then Gravatar, default true */
+    public boolean avatars() {
+        return prefs.getBoolean("commit.avatars", true);
+    }
+
+    public void setAvatars(boolean load) {
+        prefs.putBoolean("commit.avatars", load);
+        changed();
+    }
+
     /** true (default): amend, history rewrites, reset and undo of commits already pushed ask for an explicit override */
     public boolean protectPushed() {
         return prefs.getBoolean("history.protectPushed", true);

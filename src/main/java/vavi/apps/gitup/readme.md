@@ -17,6 +17,11 @@
 * hunk diff is lazy: only hunk headers are read when a file is selected, line texts are fetched only for the visible rows
 * stage / unstage / discard by file, hunk, or selected lines; on a commit: reverse a hunk or selected lines into the working copy
 * a bar above the hunk diff shows the file (with its status icon); its "…" (ellipsis in a circle) menu switches show / ignore whitespace and lines of context (1 – 100) like SourceTree (hunk / line actions are off while whitespace is ignored)
+* commit details like SourceTree's: the author's avatar, commit (full and short), parents (click to select), author, date,
+  committer (with its avatar, and the commit date when not the author date), labels (branches, remote branches, tags as in the log), message.
+  avatars come from GitHub (the commit on a github.com remote, a saved github.com account's token is used; noreply emails),
+  then Gravatar, SourceTree's "mystery man" when none; cached in `~/Library/Caches/vavi-apps-gitup/avatars`
+  (Settings › General › "Show avatars in commit details" to turn off)
 * "Uncommitted changes" row in bold, "・" for its commit and author, the latest modification time of the changed files as its date
 * file menu: open (default application), resolve using mine / theirs, stop tracking, ignore… (exact file, extension, everything beneath a folder, custom pattern;
   into .gitignore, .git/info/exclude or the global ignore file), move to trash
