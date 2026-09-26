@@ -74,6 +74,8 @@ public class LogPanel extends JPanel {
         void checkoutCommit(CommitRow commit);
         void mergeCommit(CommitRow commit);
         void cherryPick(CommitRow commit);
+        /** one of the dropdowns above the log changed */
+        void optionsChanged(vavi.apps.gitup.model.CommitLog.Options options);
     }
 
     /** GitUp's history rewrites offered in the log */
@@ -152,7 +154,52 @@ public class LogPanel extends JPanel {
         });
         JScrollPane scroll = new JScrollPane(table);
         scroll.getVerticalScrollBar().addAdjustmentListener(e -> maybeLoadMore());
+        add(optionsBar(), BorderLayout.NORTH);
         add(scroll, BorderLayout.CENTER);
+    }
+
+    // SourceTree's dropdowns above the log
+
+    private final javax.swing.JComboBox<String> branchesBox = new javax.swing.JComboBox<>(new String[] {"All Branches", "Current Branch"});
+    private final javax.swing.JComboBox<String> remotesBox = new javax.swing.JComboBox<>(new String[] {"Show Remote Branches", "Hide Remote Branches"});
+    private final javax.swing.JComboBox<String> orderBox = new javax.swing.JComboBox<>(new String[] {"Date Order", "Ancestor Order"});
+    private boolean settingOptions;
+
+    private JComponent optionsBar() {
+        JPanel bar = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 6, 2));
+        branchesBox.setToolTipText("the history of all branches, or of the current branch only");
+        remotesBox.setToolTipText("show the commits and labels of remote branches");
+        orderBox.setToolTipText("<html>Date Order: by commit date (git log --date-order)<br>"
+                + "Ancestor Order: the commits of a branch kept together (git log --topo-order)</html>");
+        for (javax.swing.JComboBox<String> box : List.of(branchesBox, remotesBox, orderBox)) {
+            box.putClientProperty("JComponent.sizeVariant", "small");
+            box.setFocusable(false);
+            box.addActionListener(e -> {
+                remotesBox.setEnabled(branchesBox.getSelectedIndex() == 0); // current branch: no other branches at all
+                if (!settingOptions && listener != null) listener.optionsChanged(options());
+            });
+            bar.add(box);
+        }
+        return bar;
+    }
+
+    /** @return the options chosen in the dropdowns */
+    public vavi.apps.gitup.model.CommitLog.Options options() {
+        return new vavi.apps.gitup.model.CommitLog.Options(branchesBox.getSelectedIndex() == 0,
+                remotesBox.getSelectedIndex() == 0, orderBox.getSelectedIndex() == 0);
+    }
+
+    /** shows the options without telling the listener */
+    public void setOptions(vavi.apps.gitup.model.CommitLog.Options o) {
+        settingOptions = true;
+        try {
+            branchesBox.setSelectedIndex(o.allBranches() ? 0 : 1);
+            remotesBox.setSelectedIndex(o.remotes() ? 0 : 1);
+            orderBox.setSelectedIndex(o.dateOrder() ? 0 : 1);
+            remotesBox.setEnabled(o.allBranches());
+        } finally {
+            settingOptions = false;
+        }
     }
 
     public void setListener(Listener listener) {

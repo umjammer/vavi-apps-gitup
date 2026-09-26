@@ -1651,4 +1651,9 @@ public class GitRepo implements AutoCloseable {
     public CommitLog log(boolean workingCopy) {
         return new CommitLog(this, workingCopy);
     }
+
+    /** @param options SourceTree's branch / remote / order filters */
+    public CommitLog log(boolean workingCopy, CommitLog.Options options) {
+        return new CommitLog(this, workingCopy, options);
+    }
 }

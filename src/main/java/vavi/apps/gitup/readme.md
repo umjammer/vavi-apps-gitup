@@ -20,6 +20,8 @@
   into .gitignore, .git/info/exclude or the global ignore file), move to trash
 * commit, amend, commit message history (last 50, `-Dgitup.messageHistory=` to change)
 * log columns: graph, description, commit, author (with email), date; select several commits to see the changes of the range
+* SourceTree's dropdowns above the log (remembered per repository): all branches / current branch,
+  show / hide remote branches, date order (`--date-order`) / ancestor order (`--topo-order`)
 * undo (⌘Z) / redo (⇧⌘Z) of commit, amend, pull, reset, branch deletion and history rewrites
   (branches and HEAD go back; a commit's changes come back staged), kept over restarts
 * GitUp's history rewriting in the log: edit message, edit author, squash / fixup into parent, move up / down, delete commit
