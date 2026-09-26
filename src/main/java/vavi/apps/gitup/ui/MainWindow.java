@@ -55,6 +55,8 @@ public class MainWindow extends JFrame {
         this.app = app;
         setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
 
+        // roomier tabs: space left and right of the name (and its close button)
+        tabs.putClientProperty("JTabbedPane.tabInsets", new java.awt.Insets(4, 32, 4, 20));
         tabs.putClientProperty("JTabbedPane.tabClosable", true);
         tabs.putClientProperty("JTabbedPane.tabCloseToolTipText", "Close");
         tabs.putClientProperty("JTabbedPane.tabCloseCallback", (BiConsumer<JTabbedPane, Integer>) (t, i) -> closeTab(i));

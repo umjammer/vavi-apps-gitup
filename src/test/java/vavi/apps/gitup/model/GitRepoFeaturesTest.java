@@ -21,6 +21,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import vavi.apps.gitup.jna.GitUpKitLocator;
 import vavi.apps.gitup.model.CommitLog.CommitRow;
+import vavi.apps.gitup.model.GitRepo.Ref;
 import vavi.apps.gitup.model.GitRepo.IgnorePatterns;
 import vavi.apps.gitup.model.GitRepo.IgnoreTarget;
 import vavi.apps.gitup.model.GitRepo.PullResult;
@@ -259,6 +260,82 @@ class GitRepoFeaturesTest {
             CommitRow r = repo.commitRow(head);
             assertEquals("b: two", r.summary());
             assertEquals(List.of(first), r.parents());
+        }
+    }
+
+    /** a commit of a file in b at the given time (committer and author dates), on the current branch */
+    void commitAt(Path b, String name, long epoch) throws Exception {
+        Files.writeString(b.resolve(name + ".txt"), name + "\n");
+        sh(b, "add", ".");
+        ProcessBuilder pb = new ProcessBuilder("git", "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false",
+                "commit", "-q", "-m", name).directory(b.toFile()).redirectErrorStream(true);
+        pb.environment().put("GIT_COMMITTER_DATE", epoch + " +0000");
+        pb.environment().put("GIT_AUTHOR_DATE", epoch + " +0000");
+        Process p = pb.start();
+        String out = new String(p.getInputStream().readAllBytes());
+        assertEquals(0, p.waitFor(), out);
+    }
+
+    static List<String> summaries(GitRepo repo, CommitLog.Options options) {
+        try (CommitLog log = repo.log(false, options)) {
+            return log.next(100).stream().map(CommitRow::summary).toList();
+        }
+    }
+
+    /** SourceTree's dropdowns above the log */
+    @Test
+    void logOptions() throws Exception {
+        Path b = setupClone(); // "one" on main and origin/main
+        long t = 1_700_000_000L;
+        sh(b, "checkout", "-q", "-b", "topic");
+        commitAt(b, "topic 1", t + 100);
+        sh(b, "checkout", "-q", "main");
+        commitAt(b, "main 1", t + 200);
+        sh(b, "checkout", "-q", "topic");
+        commitAt(b, "topic 2", t + 300);
+        sh(b, "checkout", "-q", "main");
+        commitAt(b, "main 2", t + 400);
+        pushFromA(3, "three"); // only on origin/main after the fetch
+        sh(b, "fetch", "-q");
+        try (GitRepo repo = new GitRepo(b)) {
+            List<String> all = summaries(repo, CommitLog.Options.DEFAULT);
+            assertTrue(all.contains("a: three"), "remote branches shown");
+            assertTrue(all.containsAll(List.of("topic 1", "topic 2", "main 1", "main 2")));
+
+            List<String> noRemotes = summaries(repo, new CommitLog.Options(true, false, true));
+            assertFalse(noRemotes.contains("a: three"), "remote branches hidden");
+            assertTrue(noRemotes.containsAll(List.of("topic 1", "topic 2")), "other local branches kept");
+
+            assertEquals(List.of("main 2", "main 1", "one"), summaries(repo, new CommitLog.Options(false, true, true)), "current branch only");
+
+            // date order interleaves the branches by time, ancestor order keeps each branch together
+            List<String> local = List.of("main 2", "main 1", "topic 2", "topic 1");
+            assertEquals(List.of("main 2", "topic 2", "main 1", "topic 1"),
+                    summaries(repo, new CommitLog.Options(true, false, true)).stream().filter(local::contains).toList());
+            List<String> ancestor = summaries(repo, new CommitLog.Options(true, false, false)).stream().filter(local::contains).toList();
+            assertEquals(Math.abs(ancestor.indexOf("main 2") - ancestor.indexOf("main 1")), 1, "main together: " + ancestor);
+            assertEquals(Math.abs(ancestor.indexOf("topic 2") - ancestor.indexOf("topic 1")), 1, "topic together: " + ancestor);
+        }
+        assertEquals(CommitLog.Options.DEFAULT, CommitLog.Options.decode(null));
+        assertEquals(CommitLog.Options.DEFAULT, CommitLog.Options.decode("garbage"));
+        CommitLog.Options o = new CommitLog.Options(false, false, false);
+        assertEquals(o, CommitLog.Options.decode(o.encode()));
+    }
+
+    /** SourceTree's "origin/HEAD" label: in the log labels, not among the branches */
+    @Test
+    void remoteHead() throws Exception {
+        Path b = setupClone();
+        commitInB(b, 2, "two");
+        try (GitRepo repo = new GitRepo(b)) {
+            String originMain = repo.revparse("origin/main");
+            List<Ref> heads = repo.remoteHeads();
+            assertEquals(List.of("origin/HEAD"), heads.stream().map(Ref::shorthand).toList());
+            assertEquals(Ref.Kind.REMOTE, heads.getFirst().kind());
+            assertEquals(originMain, heads.getFirst().target(), "resolved to what it points to");
+            assertFalse(repo.refs().stream().anyMatch(r -> r.shorthand().equals("origin/HEAD")), "not a branch");
+            assertEquals(List.of("origin/main", "origin/HEAD"),
+                    repo.refsByTarget().get(originMain).stream().map(Ref::shorthand).filter(n -> n.startsWith("origin/")).toList());
         }
     }
 

@@ -157,6 +157,7 @@ public class RepoPanel extends JPanel {
             staging.commitTable.setWorkdir(workdir);
             host.titleChanged(this);
             loadUndo();
+            loadLogOptions();
             startWatcher(r.gitDir());
             refreshAll(true);
         }, e -> {
@@ -258,6 +259,7 @@ public class RepoPanel extends JPanel {
             @Override public void selectedMany(List<CommitRow> commits) { commitsSelected(commits); }
             @Override public void editMessage(CommitRow commit) { RepoPanel.this.editMessage(commit); }
             @Override public void editAuthor(CommitRow commit) { RepoPanel.this.editAuthor(commit); }
+            @Override public void optionsChanged(CommitLog.Options options) { RepoPanel.this.logOptionsChanged(options); }
             @Override public void rewrite(CommitRow commit, LogPanel.Rewrite rewrite) { RepoPanel.this.rewrite(commit, rewrite); }
             @Override public void resetTo(CommitRow commit) { RepoPanel.this.resetTo(commit); }
             @Override public void checkoutCommit(CommitRow commit) { RepoPanel.this.checkoutCommit(commit); }
@@ -514,6 +516,25 @@ public class RepoPanel extends JPanel {
                             GitRepo.State state, List<Stash> stashes, List<GitRepo.Remote> remotes,
                             CommitLog log, List<CommitRow> page, boolean more, GitRepo.AheadBehind aheadBehind) {}
 
+    /** SourceTree's log filters (branches, remote branches, order), remembered per repository */
+    private volatile CommitLog.Options logOptions = CommitLog.Options.DEFAULT;
+
+    private String logOptionsKey() {
+        return "log.options." + workdir;
+    }
+
+    private void loadLogOptions() {
+        logOptions = CommitLog.Options.decode(WindowState.getString(logOptionsKey(), null));
+        logPanel.setOptions(logOptions);
+    }
+
+    private void logOptionsChanged(CommitLog.Options options) {
+        if (options.equals(logOptions)) return;
+        logOptions = options;
+        WindowState.putString(logOptionsKey(), options.encode());
+        refreshAll(true);
+    }
+
     /**
      * reloads refs, status and stashes; the log is rebuilt when refs, HEAD or
      * the dirtiness changed, or when forced.
@@ -524,18 +545,24 @@ public class RepoPanel extends JPanel {
             List<Ref> refs = repo.refs();
             String head = repo.headBranch();
             boolean dirty = !status.staged().isEmpty() || !status.unstaged().isEmpty();
-            String key = refs + "|" + repo.headOid() + "|" + head + "|" + dirty;
+            CommitLog.Options options = logOptions;
+            String key = refs + "|" + repo.headOid() + "|" + head + "|" + dirty + "|" + options;
             List<CommitRow> page = null;
             boolean more = false;
             if (force || !key.equals(loadedKey)) {
                 loadedKey = key;
                 if (log != null) log.close();
-                log = repo.log(dirty);
+                log = repo.log(dirty, options);
                 page = log.next(PAGE);
                 more = !log.isDone();
             }
             Map<String, List<Ref>> byTarget = new HashMap<>();
-            for (Ref r : refs) if (r.target() != null) byTarget.computeIfAbsent(r.target(), k -> new ArrayList<>()).add(r);
+            List<Ref> labels = new ArrayList<>(refs);
+            labels.addAll(repo.remoteHeads()); // "origin/HEAD" as SourceTree shows it
+            for (Ref r : labels) {
+                if (r.target() == null || (!options.remotes() && r.kind() == Ref.Kind.REMOTE)) continue; // hidden remote branches: no labels
+                byTarget.computeIfAbsent(r.target(), k -> new ArrayList<>()).add(r);
+            }
             return new Snapshot(status, refs, byTarget, head, repo.state(), repo.stashes(), repo.remotes(), log, page, more, repo.aheadBehind());
         }, s -> {
             headBranch = s.head();

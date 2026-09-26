@@ -207,7 +207,7 @@ class UiInteractionTest {
                 LogPanel panel = new LogPanel();
                 panel.reset(true, repo.refsByTarget(), "main");
                 panel.append(rows, false);
-                JScrollPane scroll = (JScrollPane) panel.getComponent(0);
+                JScrollPane scroll = (JScrollPane) SwingUtilities.getAncestorOfClass(JScrollPane.class, panel.getTable());
                 panel.setSize(new Dimension(700, 200));
                 panel.doLayout();
                 scroll.doLayout();

@@ -190,6 +190,19 @@ public class GitRepo implements AutoCloseable {
 
     /** @return all refs (branches, remote branches, tags), targets are peeled to commits */
     public List<Ref> refs() {
+        return refs(false);
+    }
+
+    /**
+     * the default branches of the remotes ("origin/HEAD", symbolic), not in {@link #refs()}:
+     * they are labels in the log only, not branches to check out, push or delete
+     */
+    public List<Ref> remoteHeads() {
+        return refs(true);
+    }
+
+    /** @param remoteHeads true: only the remotes' HEADs, false: everything but them */
+    private List<Ref> refs(boolean remoteHeads) {
         List<Ref> list = new ArrayList<>();
         PointerByReference ip = new PointerByReference();
         check(git.git_reference_iterator_new(ip, handle()), "refs");
@@ -203,7 +216,7 @@ public class GitRepo implements AutoCloseable {
                     Ref.Kind kind = git.git_reference_is_branch(ref) == 1 ? Ref.Kind.LOCAL
                             : git.git_reference_is_remote(ref) == 1 ? Ref.Kind.REMOTE
                             : git.git_reference_is_tag(ref) == 1 ? Ref.Kind.TAG : Ref.Kind.OTHER;
-                    if (kind == Ref.Kind.REMOTE && name.endsWith("/HEAD")) continue;
+                    if ((kind == Ref.Kind.REMOTE && name.endsWith("/HEAD")) != remoteHeads) continue;
                     String target = null;
                     PointerByReference op = new PointerByReference();
                     if (git.git_reference_peel(op, ref, GIT_OBJECT_COMMIT) == 0) {
@@ -222,9 +235,12 @@ public class GitRepo implements AutoCloseable {
     }
 
     /** @return commit id to ref short names */
+    /** the labels of the log: commit → refs pointing at it, the remotes' HEADs too */
     public Map<String, List<Ref>> refsByTarget() {
         Map<String, List<Ref>> map = new HashMap<>();
-        for (Ref r : refs()) {
+        List<Ref> labels = new ArrayList<>(refs());
+        labels.addAll(remoteHeads());
+        for (Ref r : labels) {
             if (r.target() != null) map.computeIfAbsent(r.target(), k -> new ArrayList<>()).add(r);
         }
         return map;
@@ -1650,5 +1666,10 @@ public class GitRepo implements AutoCloseable {
      */
     public CommitLog log(boolean workingCopy) {
         return new CommitLog(this, workingCopy);
+    }
+
+    /** @param options SourceTree's branch / remote / order filters */
+    public CommitLog log(boolean workingCopy, CommitLog.Options options) {
+        return new CommitLog(this, workingCopy, options);
     }
 }

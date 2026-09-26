@@ -74,6 +74,8 @@ public class LogPanel extends JPanel {
         void checkoutCommit(CommitRow commit);
         void mergeCommit(CommitRow commit);
         void cherryPick(CommitRow commit);
+        /** one of the dropdowns above the log changed */
+        void optionsChanged(vavi.apps.gitup.model.CommitLog.Options options);
     }
 
     /** GitUp's history rewrites offered in the log */
@@ -81,10 +83,16 @@ public class LogPanel extends JPanel {
 
     private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault());
 
-    private static final Color[] LANE_COLORS = {
-        new Color(0x0969da), new Color(0x2da44e), new Color(0xbf3989), new Color(0xbc4c00),
-        new Color(0x8250df), new Color(0x1b7c83), new Color(0xcf222e), new Color(0x9a6700),
+    /** SourceTree's graph colors (its STColors.graph), in its order */
+    static final Color[] LANE_COLORS = {
+        rgb(0.00, 0.28, 0.69), rgb(0.75, 0.15, 0.00), rgb(1.00, 0.54, 0.00), rgb(0.00, 0.40, 0.26),
+        rgb(0.25, 0.19, 0.58), rgb(0.00, 0.55, 0.65), rgb(0.00, 0.39, 1.00), rgb(1.00, 0.33, 0.18),
+        rgb(1.00, 0.67, 0.00), rgb(0.21, 0.70, 0.49), rgb(0.39, 0.33, 0.75), rgb(0.00, 0.72, 0.85),
     };
+
+    private static Color rgb(double r, double g, double b) {
+        return new Color((float) r, (float) g, (float) b);
+    }
 
     private static final int LANE_WIDTH = 14;
 
@@ -146,7 +154,52 @@ public class LogPanel extends JPanel {
         });
         JScrollPane scroll = new JScrollPane(table);
         scroll.getVerticalScrollBar().addAdjustmentListener(e -> maybeLoadMore());
+        add(optionsBar(), BorderLayout.NORTH);
         add(scroll, BorderLayout.CENTER);
+    }
+
+    // SourceTree's dropdowns above the log
+
+    private final javax.swing.JComboBox<String> branchesBox = new javax.swing.JComboBox<>(new String[] {"All Branches", "Current Branch"});
+    private final javax.swing.JComboBox<String> remotesBox = new javax.swing.JComboBox<>(new String[] {"Show Remote Branches", "Hide Remote Branches"});
+    private final javax.swing.JComboBox<String> orderBox = new javax.swing.JComboBox<>(new String[] {"Date Order", "Ancestor Order"});
+    private boolean settingOptions;
+
+    private JComponent optionsBar() {
+        JPanel bar = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 6, 2));
+        branchesBox.setToolTipText("the history of all branches, or of the current branch only");
+        remotesBox.setToolTipText("show the commits and labels of remote branches");
+        orderBox.setToolTipText("<html>Date Order: by commit date (git log --date-order)<br>"
+                + "Ancestor Order: the commits of a branch kept together (git log --topo-order)</html>");
+        for (javax.swing.JComboBox<String> box : List.of(branchesBox, remotesBox, orderBox)) {
+            box.putClientProperty("JComponent.sizeVariant", "small");
+            box.setFocusable(false);
+            box.addActionListener(e -> {
+                remotesBox.setEnabled(branchesBox.getSelectedIndex() == 0); // current branch: no other branches at all
+                if (!settingOptions && listener != null) listener.optionsChanged(options());
+            });
+            bar.add(box);
+        }
+        return bar;
+    }
+
+    /** @return the options chosen in the dropdowns */
+    public vavi.apps.gitup.model.CommitLog.Options options() {
+        return new vavi.apps.gitup.model.CommitLog.Options(branchesBox.getSelectedIndex() == 0,
+                remotesBox.getSelectedIndex() == 0, orderBox.getSelectedIndex() == 0);
+    }
+
+    /** shows the options without telling the listener */
+    public void setOptions(vavi.apps.gitup.model.CommitLog.Options o) {
+        settingOptions = true;
+        try {
+            branchesBox.setSelectedIndex(o.allBranches() ? 0 : 1);
+            remotesBox.setSelectedIndex(o.remotes() ? 0 : 1);
+            orderBox.setSelectedIndex(o.dateOrder() ? 0 : 1);
+            remotesBox.setEnabled(o.allBranches());
+        } finally {
+            settingOptions = false;
+        }
     }
 
     public void setListener(Listener listener) {
@@ -438,7 +491,7 @@ public class LogPanel extends JPanel {
     }
 
     /** paints lanes, edges and the commit node */
-    private static class GraphRenderer extends JComponent implements TableCellRenderer {
+    static class GraphRenderer extends JComponent implements TableCellRenderer {
         private CommitRow row;
         private boolean selected;
         private Color background;
@@ -449,6 +502,26 @@ public class LogPanel extends JPanel {
             selected = sel;
             background = sel ? t.getSelectionBackground() : t.getBackground();
             return this;
+        }
+
+        /**
+         * the lines from the commit down to its parents: {lane, 1 when it joins a lane already
+         * passing through (a short stub), 0 when it goes down to the next row}.
+         * a parent the commit's own lane goes on to is not joined to another lane too:
+         * the first commit of a branch would have two lines to its parent (the fork point).
+         */
+        static List<int[]> edges(CommitRow row) {
+            String[] before = row.before(), after = row.after();
+            int lane = row.lane();
+            String own = lane < after.length ? after[lane] : null;
+            List<int[]> edges = new ArrayList<>();
+            for (int j = 0; j < after.length; j++) {
+                if (after[j] == null || !row.parents().contains(after[j])) continue;
+                boolean passthrough = j < before.length && after[j].equals(before[j]) && j != lane;
+                if (passthrough && after[j].equals(own)) continue;
+                edges.add(new int[] {j, passthrough ? 1 : 0});
+            }
+            return edges;
         }
 
         private static int x(int lane) {
@@ -484,12 +557,11 @@ public class LogPanel extends JPanel {
                     g.drawLine(x(i), 0, x(i), h);
                 }
             }
-            for (int j = 0; j < after.length; j++) {
-                if (after[j] != null && row.parents().contains(after[j])) {
-                    boolean passthrough = j < before.length && after[j].equals(before[j]) && j != lane;
-                    g.setColor(color(passthrough ? lane : j));
-                    g.drawLine(x(lane), mid, x(j), passthrough ? mid + h / 4 : h);
-                }
+            for (int[] e : edges(row)) {
+                int j = e[0];
+                boolean passthrough = e[1] == 1;
+                g.setColor(color(passthrough ? lane : j));
+                g.drawLine(x(lane), mid, x(j), passthrough ? mid + h / 4 : h);
             }
             g.setColor(color(lane));
             g.fillOval(x(lane) - 4, mid - 4, 8, 8);

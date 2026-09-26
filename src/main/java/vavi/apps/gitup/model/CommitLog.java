@@ -52,16 +52,47 @@ public final class CommitLog implements AutoCloseable {
     private boolean done;
     private final GraphLayout layout = new GraphLayout();
 
+    /**
+     * SourceTree's log filters.
+     *
+     * @param allBranches false: only the history of HEAD ("Current Branch")
+     * @param remotes false: remote branches are not shown (with all branches)
+     * @param dateOrder true: "Date Order" (git log --date-order), false: "Ancestor Order" (git log --topo-order)
+     */
+    public record Options(boolean allBranches, boolean remotes, boolean dateOrder) {
+        public static final Options DEFAULT = new Options(true, true, true);
+
+        /** e.g. "all,remotes,date" */
+        public String encode() {
+            return (allBranches ? "all" : "current") + "," + (remotes ? "remotes" : "noremotes") + "," + (dateOrder ? "date" : "ancestor");
+        }
+
+        /** @return DEFAULT for null or garbage */
+        public static Options decode(String s) {
+            if (s == null) return DEFAULT;
+            List<String> v = List.of(s.split(","));
+            if (v.size() != 3) return DEFAULT;
+            return new Options(!v.get(0).equals("current"), !v.get(1).equals("noremotes"), !v.get(2).equals("ancestor"));
+        }
+    }
+
     CommitLog(GitRepo repo, boolean workingCopy) {
+        this(repo, workingCopy, Options.DEFAULT);
+    }
+
+    CommitLog(GitRepo repo, boolean workingCopy, Options options) {
         this.repo = repo;
         PointerByReference wp = new PointerByReference();
         check(git.git_revwalk_new(wp, repo.handle()), "revwalk");
         walk = wp.getValue();
-        git.git_revwalk_sorting(walk, GIT_SORT_TOPOLOGICAL | GIT_SORT_TIME);
+        // topological alone keeps the commits of a branch together (--topo-order), with time: --date-order
+        git.git_revwalk_sorting(walk, options.dateOrder() ? GIT_SORT_TOPOLOGICAL | GIT_SORT_TIME : GIT_SORT_TOPOLOGICAL);
         if (!repo.isHeadUnborn()) git.git_revwalk_push_head(walk);
-        git.git_revwalk_push_glob(walk, "refs/heads");
-        git.git_revwalk_push_glob(walk, "refs/remotes");
-        git.git_revwalk_push_glob(walk, "refs/tags");
+        if (options.allBranches()) {
+            git.git_revwalk_push_glob(walk, "refs/heads");
+            if (options.remotes()) git.git_revwalk_push_glob(walk, "refs/remotes");
+            git.git_revwalk_push_glob(walk, "refs/tags");
+        }
         // lane 0 connects the "Uncommitted changes" row to HEAD
         if (workingCopy && !repo.isHeadUnborn()) layout.expect(repo.revparse("HEAD"));
     }
