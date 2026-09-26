@@ -95,6 +95,51 @@ class DiffViewTest {
         }
     }
 
+    /** a diff font smaller than 12pt keeps the hunk headers 12pt high, the code rows follow the font */
+    @Test
+    void smallFontHeaderHeight() throws Exception {
+        String base = IntStream.range(0, 100).mapToObj(i -> "line " + i + "\n").collect(Collectors.joining());
+        Files.writeString(dir.resolve("f.txt"), base);
+        sh("init", "-q", "-b", "main");
+        sh("add", "f.txt");
+        sh("commit", "-q", "-m", "one");
+        Files.writeString(dir.resolve("f.txt"), base.replace("line 5\n", "line five\n").replace("line 50\n", "LINE 50\nadded\n").replace("line 90\n", ""));
+
+        try (GitRepo repo = new GitRepo(dir);
+             LazyPatch patch = repo.openPatch(repo.status().unstaged().getFirst())) {
+            assertEquals(3, patch.hunks().size());
+            BufferedImage[] image = new BufferedImage[1];
+            SwingUtilities.invokeAndWait(() -> {
+                FlatMacLightLaf.setup();
+                DiffView view = new DiffView();
+                java.awt.Font small = new java.awt.Font(DiffView.defaultFontName(), java.awt.Font.PLAIN, 8);
+                view.setFont(small);
+                view.setPatch(patch, DiffView.Mode.UNSTAGED, null);
+                int line = view.getFontMetrics(small).getHeight() + 2;
+                int header = view.getFontMetrics(small.deriveFont(12f)).getHeight() + 2;
+                assertTrue(header > line);
+                int h1 = patch.hunkRow(1);
+                assertEquals(header, view.rowHeight(h1));
+                assertEquals(line, view.rowHeight(h1 + 1));
+                for (int r = 0; r < patch.rowCount(); r++) {
+                    int y = view.rowY(r);
+                    assertEquals(r, view.rowAt(y), "top of " + r);
+                    assertEquals(r, view.rowAt(y + view.rowHeight(r) - 1), "bottom of " + r);
+                    if (r + 1 < patch.rowCount()) assertEquals(y + view.rowHeight(r), view.rowY(r + 1));
+                }
+                int last = patch.rowCount() - 1;
+                assertEquals(view.rowY(last) + view.rowHeight(last), view.getPreferredSize().height);
+
+                JScrollPane scroll = new JScrollPane(view);
+                scroll.setSize(new Dimension(900, 400));
+                scroll.doLayout();
+                scroll.getViewport().doLayout();
+                image[0] = paint(scroll);
+            });
+            ImageIO.write(image[0], "png", Path.of("target/diffview-small.png").toFile());
+        }
+    }
+
     private static BufferedImage paint(JScrollPane scroll) {
         BufferedImage image = new BufferedImage(scroll.getWidth(), scroll.getHeight(), BufferedImage.TYPE_INT_RGB);
         Graphics2D g = image.createGraphics();

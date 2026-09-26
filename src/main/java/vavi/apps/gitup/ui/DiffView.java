@@ -44,7 +44,8 @@ import vavi.apps.gitup.model.Settings;
 /**
  * virtualized hunk diff view.
  * <p>
- * the preferred height is {@code rowCount * rowHeight}, painting asks the
+ * the preferred height is {@code rowCount * rowHeight} (plus the extra height
+ * of hunk headers, see {@link #MIN_HEADER_FONT_SIZE}), painting asks the
  * {@link LazyPatch} only for the rows inside the clip, so a huge diff costs
  * the same as a small one. rows are selectable by hunk (click the header) and
  * by line (click, shift-click, cmd-click, drag). hunk headers have
@@ -77,9 +78,15 @@ public class DiffView extends JComponent implements Scrollable {
     private int rowHeight;
     private int charWidth;
     private int ascent;
+    /** hunk header row height, at least {@link #rowHeight} */
+    private int headerHeight;
+    /** font of the header buttons, the diff font but not smaller than {@link #MIN_HEADER_FONT_SIZE} */
+    private Font buttonFont;
     private int maxChars = 80;
 
     private static final int GUTTER_DIGITS = 6;
+    /** hunk headers keep the height of this font size, so the buttons stay usable with a small diff font */
+    private static final float MIN_HEADER_FONT_SIZE = 12;
     private static final int TAB = 4;
 
     /** buttons painted in hunk headers during the last paint, in component coordinates */
@@ -118,6 +125,8 @@ public class DiffView extends JComponent implements Scrollable {
         rowHeight = fm.getHeight() + 2;
         charWidth = fm.charWidth('m');
         ascent = fm.getAscent() + 1;
+        buttonFont = font.getSize2D() < MIN_HEADER_FONT_SIZE ? font.deriveFont(MIN_HEADER_FONT_SIZE) : font;
+        headerHeight = Math.max(rowHeight, getFontMetrics(buttonFont).getHeight() + 2);
     }
 
     public void setListener(Listener listener) {
@@ -177,7 +186,7 @@ public class DiffView extends JComponent implements Scrollable {
                 selection.clear();
                 selection.set(r);
                 anchor = r;
-                int y = r * rowHeight;
+                int y = rowY(r);
                 Rectangle v = getVisibleRect();
                 scrollRectToVisible(new Rectangle(v.x, Math.max(0, y - v.height / 3), 1, v.height));
                 repaint();
@@ -201,13 +210,42 @@ public class DiffView extends JComponent implements Scrollable {
         return patch == null ? 0 : patch.rowCount();
     }
 
-    private int rowAt(int y) {
-        return Math.max(0, Math.min(rows() - 1, y / rowHeight));
+    /** @return the y of the hunk header row */
+    private int hunkY(int hunk) {
+        return patch.hunkRow(hunk) * rowHeight + hunk * (headerHeight - rowHeight);
+    }
+
+    /** @return the top of the row */
+    int rowY(int r) {
+        int h = patch.hunkOfRow(r);
+        int headers = r == patch.hunkRow(h) ? h : h + 1;
+        return r * rowHeight + headers * (headerHeight - rowHeight);
+    }
+
+    int rowHeight(int r) {
+        return patch.row(r).isHeader() ? headerHeight : rowHeight;
+    }
+
+    int rowAt(int y) {
+        if (rows() == 0) return 0;
+        // the last hunk whose header starts at or above y
+        int lo = 0, hi = patch.hunks().size() - 1;
+        while (lo < hi) {
+            int mid = (lo + hi + 1) >>> 1;
+            if (hunkY(mid) <= y) lo = mid; else hi = mid - 1;
+        }
+        int top = hunkY(lo);
+        int r = y < top + headerHeight ? patch.hunkRow(lo) : patch.hunkRow(lo) + 1 + (y - top - headerHeight) / rowHeight;
+        return Math.max(0, Math.min(rows() - 1, r));
+    }
+
+    private int totalHeight() {
+        return patch == null ? 0 : rows() * rowHeight + patch.hunks().size() * (headerHeight - rowHeight);
     }
 
     @Override
     public Dimension getPreferredSize() {
-        return new Dimension(gutterWidth() + (maxChars + 2) * charWidth, Math.max(rows() * rowHeight, rowHeight));
+        return new Dimension(gutterWidth() + (maxChars + 2) * charWidth, Math.max(totalHeight(), rowHeight));
     }
 
     // painting
@@ -296,17 +334,18 @@ public class DiffView extends JComponent implements Scrollable {
 
         Rectangle visible = getVisibleRect();
         int gw = gutterWidth();
-        int first = clip.y / rowHeight;
-        int last = Math.min(rows() - 1, (clip.y + clip.height) / rowHeight);
+        int first = rowAt(clip.y);
+        int last = rowAt(clip.y + clip.height);
         int widest = maxChars;
-        for (int r = first; r <= last; r++) {
+        int y = rowY(first);
+        for (int r = first; r <= last; y += rowHeight(r), r++) {
             Row row = patch.row(r);
-            int y = r * rowHeight;
             if (row.isHeader()) {
                 g.setColor(headBg);
-                g.fillRect(clip.x, y, clip.width, rowHeight);
+                g.fillRect(clip.x, y, clip.width, headerHeight);
                 g.setColor(dim);
-                g.drawString(row.content(), gw + 4, y + ascent);
+                // the header text is code: the diff font, centered in the taller row
+                g.drawString(row.content(), gw + 4, y + (headerHeight - rowHeight) / 2 + ascent);
                 paintHeaderButtons(g, row.hunk(), visible, y);
                 continue;
             }
@@ -374,7 +413,10 @@ public class DiffView extends JComponent implements Scrollable {
         } else {
             list.add(new Object[] {"Unstage " + what, Action.UNSTAGE});
         }
+        Font font = g.getFont();
+        g.setFont(buttonFont);
         FontMetrics fm = g.getFontMetrics();
+        int baseline = y + (headerHeight - fm.getHeight()) / 2 + fm.getAscent();
         int x = visible.x + visible.width - 6;
         Color border = UIManager.getColor("Component.borderColor");
         Color buttonBg = UIManager.getColor("Button.background");
@@ -383,16 +425,17 @@ public class DiffView extends JComponent implements Scrollable {
             String label = (String) list.get(i)[0];
             int w = fm.stringWidth(label) + 14;
             x -= w;
-            Rectangle b = new Rectangle(x, y + 1, w, rowHeight - 2);
+            Rectangle b = new Rectangle(x, y + 1, w, headerHeight - 2);
             g.setColor(buttonBg != null ? buttonBg : Color.white);
             g.fillRoundRect(b.x, b.y, b.width, b.height, 6, 6);
             g.setColor(border != null ? border : Color.gray);
             g.drawRoundRect(b.x, b.y, b.width - 1, b.height - 1, 6, 6);
             g.setColor(fg != null ? fg : Color.black);
-            g.drawString(label, b.x + 7, y + ascent);
+            g.drawString(label, b.x + 7, baseline);
             buttons.add(new HeaderButton(b, (Action) list.get(i)[1], hunk, lines));
             x -= 6;
         }
+        g.setFont(font);
     }
 
     // interaction
