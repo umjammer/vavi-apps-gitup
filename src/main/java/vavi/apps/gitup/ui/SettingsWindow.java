@@ -78,6 +78,7 @@ public class SettingsWindow extends JFrame {
         // SourceTree's preferences: the icon above the title
         tabs.putClientProperty("JTabbedPane.tabIconPlacement", javax.swing.SwingConstants.TOP);
         vavi.apps.gitup.ui.icons.IconProvider icons = vavi.apps.gitup.ui.icons.IconProvider.get();
+        tabs.addTab("General", icons.icon(vavi.apps.gitup.ui.icons.IconProvider.Key.PREFS_GENERAL, 24), generalTab());
         tabs.addTab("Accounts", icons.icon(vavi.apps.gitup.ui.icons.IconProvider.Key.PREFS_ACCOUNTS, 24), accountsTab());
         tabs.addTab("Diff", icons.icon(vavi.apps.gitup.ui.icons.IconProvider.Key.PREFS_DIFF, 24), diffTab());
         tabs.addTab("History", icons.icon(vavi.apps.gitup.ui.icons.IconProvider.Key.PREFS_HISTORY, 24), historyTab());
@@ -358,6 +359,44 @@ public class SettingsWindow extends JFrame {
     // diff
 
     // history
+
+    // general
+
+    private JComponent generalTab() {
+        javax.swing.JCheckBox fetch = new javax.swing.JCheckBox("Check default remotes for updates every", settings.fetchInterval() > 0);
+        JSpinner minutes = new JSpinner(new SpinnerNumberModel(settings.fetchInterval() > 0 ? settings.fetchInterval() : 10, 1, 1440, 1));
+        minutes.setEnabled(fetch.isSelected());
+        Runnable storeFetch = () -> settings.setFetchInterval(fetch.isSelected() ? (Integer) minutes.getValue() : 0);
+        fetch.addActionListener(e -> {
+            minutes.setEnabled(fetch.isSelected());
+            storeFetch.run();
+        });
+        minutes.addChangeListener(e -> storeFetch.run());
+        JPanel fetchRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        fetchRow.add(fetch);
+        fetchRow.add(minutes);
+        fetchRow.add(new JLabel("minutes"));
+        JLabel fetchNote = new JLabel("<html><font color='gray'>a quiet fetch (saved accounts only, never asks) so that the ahead / behind<br>"
+                + "badges and the log show what happened on the server, also after checking out a branch</font></html>");
+        fetchNote.setBorder(BorderFactory.createEmptyBorder(0, 28, 8, 0));
+
+        javax.swing.JCheckBox spell = new javax.swing.JCheckBox("Check spelling of commit messages", settings.spellCheck());
+        spell.addActionListener(e -> settings.setSpellCheck(spell.isSelected()));
+        JLabel spellNote = new JLabel("<html><font color='gray'>macOS's spell checker (its languages and learned words), "
+                + "right click a word for guesses</font></html>");
+        spellNote.setBorder(BorderFactory.createEmptyBorder(0, 28, 0, 0));
+
+        JPanel p = new JPanel();
+        p.setLayout(new javax.swing.BoxLayout(p, javax.swing.BoxLayout.Y_AXIS));
+        p.setBorder(BorderFactory.createEmptyBorder(12, 8, 12, 12));
+        for (JComponent c : new JComponent[] {fetchRow, fetchNote, spell, spellNote}) {
+            c.setAlignmentX(0);
+            p.add(c);
+        }
+        JPanel north = new JPanel(new BorderLayout());
+        north.add(p, BorderLayout.NORTH);
+        return north;
+    }
 
     private JComponent historyTab() {
         javax.swing.JCheckBox protect = new javax.swing.JCheckBox("Protect pushed commits", settings.protectPushed());

@@ -88,7 +88,15 @@ class SettingsTest {
         s.setDiffFont(null, 0);
         assertNull(s.diffFontName());
         assertEquals(0, s.diffFontSize());
-        assertEquals(9, changes[0]);
+        assertEquals(10, s.fetchInterval(), "SourceTree's default");
+        s.setFetchInterval(0);
+        assertEquals(0, new Settings(prefs).fetchInterval(), "never");
+        s.setFetchInterval(-5);
+        assertEquals(0, s.fetchInterval());
+        assertTrue(s.spellCheck());
+        s.setSpellCheck(false);
+        assertFalse(new Settings(prefs).spellCheck());
+        assertEquals(12, changes[0]);
     }
 
     @Test

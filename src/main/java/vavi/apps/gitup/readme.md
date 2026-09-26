@@ -19,6 +19,8 @@
 * file menu: open (default application), resolve using mine / theirs, stop tracking, ignore… (exact file, extension, everything beneath a folder, custom pattern;
   into .gitignore, .git/info/exclude or the global ignore file), move to trash
 * commit, amend, commit message history (last 50, `-Dgitup.messageHistory=` to change)
+* spell checking of the commit message with macOS's spell checker (as SourceTree's): red underlines,
+  right click for guesses, "Ignore Spelling", "Learn Spelling"
 * log columns: graph, description, commit, author (with email), date; select several commits to see the changes of the range
 * SourceTree's dropdowns above the log (remembered per repository): all branches / current branch,
   show / hide remote branches, date order (`--date-order`) / ancestor order (`--topo-order`)
@@ -39,11 +41,14 @@
   merge (commit immediately or not, no fast-forward), cherry-pick (commit immediately or not, keeps the author,
   a merge commit against a chosen parent)
 * toolbar count badges like SourceTree: commits behind on Pull, ahead on Push (against the upstream, as of the last fetch)
+* background fetch like SourceTree ("Check default remotes for updates every 10 minutes", also after checking out a branch):
+  quiet, saved accounts only, so the badges show a branch merged on the server
 * push dialog like SourceTree: remote, branches to push (remote branch name, track), push all tags, force push
 * fetch / push (GitUpKit transport, ssh keys, credential prompts),
   pull (fast-forward, merge or rebase: "Pull with Rebase" or `pull.rebase`; on conflicts resolve, then commit / continue, or abort)
 * live refresh with FSEvents (changes to ignored files only are skipped)
 * settings (⌘,)
+    * general: background fetch interval (or never), spell checking of commit messages
     * accounts: service, host, username, protocol; passwords / tokens in the macOS Keychain (shared with git's osxkeychain helper),
       used when a fetch / push asks for credentials; import from `~/.m2/settings.xml` servers (checkbox per server,
       service / host guessed from the id, token headers of GitLab style servers too, encrypted passwords are skipped)

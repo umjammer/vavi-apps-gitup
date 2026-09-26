@@ -140,6 +140,26 @@ public final class Settings {
         changed();
     }
 
+    /** SourceTree's "Check default remotes for updates every N minutes", 0: never (default 10) */
+    public int fetchInterval() {
+        return prefs.getInt("remote.fetchInterval", 10);
+    }
+
+    public void setFetchInterval(int minutes) {
+        prefs.putInt("remote.fetchInterval", Math.max(0, minutes));
+        changed();
+    }
+
+    /** checks the spelling of commit messages (macOS's spell checker), default true */
+    public boolean spellCheck() {
+        return prefs.getBoolean("commit.spellCheck", true);
+    }
+
+    public void setSpellCheck(boolean check) {
+        prefs.putBoolean("commit.spellCheck", check);
+        changed();
+    }
+
     /** true (default): amend, history rewrites, reset and undo of commits already pushed ask for an explicit override */
     public boolean protectPushed() {
         return prefs.getBoolean("history.protectPushed", true);

@@ -158,6 +158,8 @@ public class RepoPanel extends JPanel {
             host.titleChanged(this);
             loadUndo();
             loadLogOptions();
+            spellCheck = SpellCheck.attach(staging.message, () -> vavi.apps.gitup.model.Settings.get().spellCheck());
+            scheduleAutoFetch();
             startWatcher(r.gitDir());
             refreshAll(true);
         }, e -> {
@@ -190,6 +192,8 @@ public class RepoPanel extends JPanel {
     private final Runnable settingsListener = () -> SwingUtilities.invokeLater(() -> {
         diff.applyFontSetting();
         diff.repaint();
+        if (this.spellCheck != null) this.spellCheck.recheck();
+        scheduleAutoFetch();
         int n = vavi.apps.gitup.model.Settings.get().contextLines();
         if (repo == null && workdir == null) return;
         exec.run(() -> repo.setContextLines(n), () -> {
@@ -209,6 +213,7 @@ public class RepoPanel extends JPanel {
     public void close() {
         vavi.apps.gitup.model.Settings.get().removeListener(settingsListener);
         watchTimer.stop();
+        if (autoFetchTimer != null) autoFetchTimer.stop();
         if (watcher != null) {
             watcher.close();
             watcher = null;
@@ -217,6 +222,7 @@ public class RepoPanel extends JPanel {
         exec.run(() -> {
             if (shown != null) shown.close();
             if (remote != null) remote.close();
+            if (quietRemote != null) quietRemote.close();
             if (log != null) log.close();
             if (repo != null) repo.close();
         }, null);
@@ -1521,7 +1527,11 @@ public class RepoPanel extends JPanel {
         switch (ref.kind()) {
             case LOCAL -> {
                 if (ref.shorthand().equals(headBranch)) return;
-                exec.run(() -> repo.checkout(ref.shorthand()), () -> refreshAll(true));
+                // the upstream may have moved on the server (a merged pull request): the badges after a fetch
+                exec.run(() -> repo.checkout(ref.shorthand()), () -> {
+                    refreshAll(true);
+                    autoFetch();
+                });
             }
             case REMOTE -> exec.run(() -> repo.checkoutRemote(ref.shorthand()), () -> refreshAll(true));
             default -> {}
@@ -1902,6 +1912,74 @@ public class RepoPanel extends JPanel {
             }
             refreshAll(false);
         });
+    }
+
+    // background fetch
+
+    /** the commit message box's spell checking */
+    private SpellCheck spellCheck;
+
+    /** SourceTree's "Check default remotes for updates every N minutes" */
+    private javax.swing.Timer autoFetchTimer;
+    /** a fetch of its own: never asks, the saved accounts only */
+    private RemoteOps quietRemote;
+    private volatile boolean autoFetching;
+
+    /** (re)starts the periodic fetch of the setting, the first one a little after the tab opened */
+    private void scheduleAutoFetch() {
+        if (workdir == null) return;
+        int minutes = vavi.apps.gitup.model.Settings.get().fetchInterval();
+        if (autoFetchTimer != null) {
+            if (minutes > 0 && autoFetchTimer.getDelay() == minutes * 60_000) return; // unchanged
+            autoFetchTimer.stop();
+            autoFetchTimer = null;
+        }
+        if (minutes <= 0) return;
+        autoFetchTimer = new javax.swing.Timer(minutes * 60_000, e -> autoFetch());
+        autoFetchTimer.setInitialDelay(5_000);
+        autoFetchTimer.start();
+    }
+
+    /**
+     * fetches all remotes quietly so that the badges and the log show what happened on the server.
+     * skipped while a remote operation of the user runs, failures only go to the log.
+     */
+    private void autoFetch() {
+        if (repo == null || autoFetching || vavi.apps.gitup.model.Settings.get().fetchInterval() <= 0) return;
+        if (!fetchAction.isEnabled()) return; // the user's fetch / pull / push is running
+        autoFetching = true;
+        exec.submit(() -> {
+            if (quietRemote == null) quietRemote = new RemoteOps(repo.workdir(), quietPrompter(), s -> {});
+            quietRemote.fetchAll();
+            return null;
+        }, x -> {
+            autoFetching = false;
+            refreshAll(false);
+        }, e -> {
+            autoFetching = false;
+            logger.log(System.Logger.Level.DEBUG, "background fetch: " + e.getMessage());
+        });
+    }
+
+    /** a saved account once per url and fetch, never a dialog */
+    private RemoteOps.Prompter quietPrompter() {
+        java.util.Set<String> tried = java.util.concurrent.ConcurrentHashMap.newKeySet();
+        return new RemoteOps.Prompter() {
+            @Override public String[] userPassword(String url, String user) {
+                if (!tried.add(url)) return null;
+                try {
+                    vavi.apps.gitup.model.Accounts.Account a = vavi.apps.gitup.model.Accounts.get().find(url, user);
+                    String secret = a != null ? vavi.apps.gitup.model.Accounts.get().secret(a) : null;
+                    return secret != null ? new String[] {a.username(), secret} : null;
+                } catch (RuntimeException e) {
+                    return null;
+                }
+            }
+
+            @Override public String passphrase(String url, String privateKeyPath) {
+                return null;
+            }
+        };
     }
 
     private void fetch() {
