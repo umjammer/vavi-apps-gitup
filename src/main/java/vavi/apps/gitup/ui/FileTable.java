@@ -279,15 +279,7 @@ public class FileTable extends JTable {
             JLabel l = (JLabel) super.getTableCellRendererComponent(t, v, sel, false, r, c);
             FileChange.Kind k = (FileChange.Kind) v;
             l.setToolTipText(k.name().toLowerCase());
-            javax.swing.Icon icon = IconProvider.get().icon(switch (k) {
-                case ADDED -> IconProvider.Key.FILE_ADDED;
-                case MODIFIED -> IconProvider.Key.FILE_MODIFIED;
-                case DELETED -> IconProvider.Key.FILE_DELETED;
-                case RENAMED -> IconProvider.Key.FILE_RENAMED;
-                case TYPECHANGE -> IconProvider.Key.FILE_TYPECHANGE;
-                case UNTRACKED -> IconProvider.Key.FILE_UNTRACKED;
-                case CONFLICTED -> IconProvider.Key.FILE_CONFLICTED;
-            }, 14);
+            javax.swing.Icon icon = statusIcon(k);
             l.setIcon(icon);
             if (icon != null) {
                 l.setText("");
@@ -295,17 +287,33 @@ public class FileTable extends JTable {
             }
             l.setText(String.valueOf(k.symbol));
             l.setFont(l.getFont().deriveFont(Font.BOLD));
-            if (!sel) {
-                l.setForeground(switch (k) {
-                    case ADDED, UNTRACKED -> new Color(0x2da44e);
-                    case DELETED -> new Color(0xcf222e);
-                    case CONFLICTED -> new Color(0xbf8700);
-                    case RENAMED -> new Color(0x8250df);
-                    default -> new Color(0x0969da);
-                });
-            }
+            if (!sel) l.setForeground(statusColor(k));
             return l;
         }
+    }
+
+    /** @return the status icon of the file lists, null when the icon provider has none */
+    static javax.swing.Icon statusIcon(FileChange.Kind k) {
+        return IconProvider.get().icon(switch (k) {
+            case ADDED -> IconProvider.Key.FILE_ADDED;
+            case MODIFIED -> IconProvider.Key.FILE_MODIFIED;
+            case DELETED -> IconProvider.Key.FILE_DELETED;
+            case RENAMED -> IconProvider.Key.FILE_RENAMED;
+            case TYPECHANGE -> IconProvider.Key.FILE_TYPECHANGE;
+            case UNTRACKED -> IconProvider.Key.FILE_UNTRACKED;
+            case CONFLICTED -> IconProvider.Key.FILE_CONFLICTED;
+        }, 14);
+    }
+
+    /** the color of the status letter shown without an icon */
+    static Color statusColor(FileChange.Kind k) {
+        return switch (k) {
+            case ADDED, UNTRACKED -> new Color(0x2da44e);
+            case DELETED -> new Color(0xcf222e);
+            case CONFLICTED -> new Color(0xbf8700);
+            case RENAMED -> new Color(0x8250df);
+            default -> new Color(0x0969da);
+        };
     }
 
     /** file name, then the directory dimmed */

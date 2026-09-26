@@ -90,6 +90,7 @@ public interface LibGit2 extends Library {
     int GIT_DIFF_INCLUDE_UNTRACKED = 1 << 3;
     int GIT_DIFF_RECURSE_UNTRACKED_DIRS = 1 << 4;
     int GIT_DIFF_DISABLE_PATHSPEC_MATCH = 1 << 12;
+    int GIT_DIFF_IGNORE_WHITESPACE = 1 << 22;
     int GIT_DIFF_SHOW_UNTRACKED_CONTENT = 1 << 25;
 
     int GIT_DELTA_UNMODIFIED = 0;

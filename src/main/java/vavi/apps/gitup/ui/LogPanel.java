@@ -96,6 +96,9 @@ public class LogPanel extends JPanel {
 
     private static final int LANE_WIDTH = 14;
 
+    /** the commit and author of "Uncommitted changes" */
+    private static final String UNCOMMITTED_MARK = "・";
+
     /** column indices: graph, description, commit, author, date */
     static final int COMMIT = 2, AUTHOR = 3, DATE_COLUMN = 4;
 
@@ -103,6 +106,8 @@ public class LogPanel extends JPanel {
     private Map<String, List<Ref>> refs = Collections.emptyMap();
     private String headBranch;
     private boolean uncommitted;
+    /** the latest modification of the changed files, the date of "Uncommitted changes" */
+    private java.time.Instant uncommittedTime;
     /** false until the first {@link #reset} */
     private boolean more;
     private boolean loading;
@@ -260,6 +265,13 @@ public class LogPanel extends JPanel {
         model.fireTableDataChanged();
     }
 
+    /** @param time the latest modification of the changed files, null for unknown */
+    public void setUncommittedTime(java.time.Instant time) {
+        if (java.util.Objects.equals(uncommittedTime, time)) return;
+        uncommittedTime = time;
+        if (uncommitted) model.fireTableCellUpdated(0, DATE_COLUMN);
+    }
+
     public boolean hasUncommitted() {
         return uncommitted;
     }
@@ -384,7 +396,12 @@ public class LogPanel extends JPanel {
 
         @Override public Object getValueAt(int r, int c) {
             CommitRow row = commitAt(r);
-            if (row == null) return c == 1 ? "Uncommitted changes" : c == 0 ? null : "";
+            if (row == null) return switch (c) { // SourceTree's
+                case 0 -> null;
+                case 1 -> "Uncommitted changes";
+                case COMMIT, AUTHOR -> UNCOMMITTED_MARK;
+                default -> uncommittedTime != null ? DATE.format(uncommittedTime) : "";
+            };
             return switch (c) {
                 case 0, 1 -> row;
                 case COMMIT -> row.shortOid();
@@ -432,7 +449,7 @@ public class LogPanel extends JPanel {
                 int baseline = (h - fm.getHeight()) / 2 + fm.getAscent();
                 int x = 4;
                 if (row == null) {
-                    g.setFont(font.deriveFont(Font.ITALIC));
+                    g.setFont(font.deriveFont(Font.BOLD));
                     g.setColor(foreground);
                     g.drawString(placeholder, x, baseline);
                     return;

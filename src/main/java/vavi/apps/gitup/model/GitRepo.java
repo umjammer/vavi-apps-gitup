@@ -293,11 +293,19 @@ public class GitRepo implements AutoCloseable {
         this.contextLines = contextLines;
     }
 
+    private boolean ignoreWhitespace;
+
+    /** true: whitespace differences are ignored in the patches opened from now on */
+    public void setIgnoreWhitespace(boolean ignoreWhitespace) {
+        this.ignoreWhitespace = ignoreWhitespace;
+    }
+
     private GitDiffOptions diffOptions(String path, boolean untracked) {
         GitDiffOptions o = new GitDiffOptions();
         git.git_diff_options_init(o, 1);
         o.context_lines = contextLines;
         o.flags = GIT_DIFF_DISABLE_PATHSPEC_MATCH;
+        if (ignoreWhitespace) o.flags |= GIT_DIFF_IGNORE_WHITESPACE;
         if (untracked) o.flags |= GIT_DIFF_INCLUDE_UNTRACKED | GIT_DIFF_RECURSE_UNTRACKED_DIRS | GIT_DIFF_SHOW_UNTRACKED_CONTENT;
         o.pathspec = new GitStrarray();
         if (path != null) o.pathspec.set(path);
@@ -386,12 +394,12 @@ public class GitRepo implements AutoCloseable {
         }
     }
 
-    private static LazyPatch toPatch(Pointer diff, FileChange file) {
+    private LazyPatch toPatch(Pointer diff, FileChange file) {
         if (git.git_diff_num_deltas(diff).longValue() == 0) {
             git.git_diff_free(diff);
             return null;
         }
-        return new LazyPatch(diff, 0, file);
+        return new LazyPatch(diff, 0, file, ignoreWhitespace);
     }
 
     /** @return [first parent tree of oldest (nullable), tree of newest] */

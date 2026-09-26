@@ -138,6 +138,7 @@ public class DiffView extends JComponent implements Scrollable {
      * @param message shown when patch is null (e.g. "No changes")
      */
     public void setPatch(LazyPatch patch, Mode mode, String message) {
+        LazyPatch old = this.patch;
         this.patch = patch;
         this.mode = mode;
         this.message = patch == null ? message : patch.isBinary() ? "Binary file" : patch.rowCount() == 0 ? "No content changes" : null;
@@ -147,6 +148,12 @@ public class DiffView extends JComponent implements Scrollable {
         revalidate();
         repaint();
         if (getParent() != null) scrollRectToVisible(new Rectangle(0, 0, 1, 1));
+        firePropertyChange("patch", old, patch);
+    }
+
+    /** false when the patch leaves out whitespace changes: it would not apply to the file */
+    private boolean actionsEnabled() {
+        return patch != null && !patch.isWhitespaceIgnored();
     }
 
     /** keeps the patch but replaces it with a re-read one, preserving the scroll position */
@@ -355,6 +362,7 @@ public class DiffView extends JComponent implements Scrollable {
     }
 
     private void paintHeaderButtons(Graphics2D g, int hunk, Rectangle visible, int y) {
+        if (!actionsEnabled()) return;
         boolean lines = hunkHasSelection(hunk);
         String what = lines ? "lines" : "hunk";
         List<Object[]> list = new ArrayList<>();
@@ -397,7 +405,7 @@ public class DiffView extends JComponent implements Scrollable {
             return;
         }
         if (!SwingUtilities.isLeftMouseButton(e)) return;
-        for (HeaderButton b : buttons) {
+        for (HeaderButton b : actionsEnabled() ? buttons : List.<HeaderButton>of()) {
             if (b.bounds().contains(e.getPoint())) {
                 fire(b.action(), b.lines() ? selection : hunkRows(b.hunk()));
                 return;
@@ -467,19 +475,20 @@ public class DiffView extends JComponent implements Scrollable {
         int hunk = patch.hunkOfRow(r);
         JPopupMenu menu = new JPopupMenu();
         boolean sel = !selection.isEmpty();
+        boolean act = actionsEnabled();
         if (mode == Mode.UNSTAGED) {
-            add(menu, "Stage Lines", sel, () -> fire(Action.STAGE, selection));
-            add(menu, "Stage Hunk", true, () -> fire(Action.STAGE, hunkRows(hunk)));
-            add(menu, "Discard Lines", sel, () -> fire(Action.DISCARD, selection));
-            add(menu, "Discard Hunk", true, () -> fire(Action.DISCARD, hunkRows(hunk)));
+            add(menu, "Stage Lines", act && sel, () -> fire(Action.STAGE, selection));
+            add(menu, "Stage Hunk", act, () -> fire(Action.STAGE, hunkRows(hunk)));
+            add(menu, "Discard Lines", act && sel, () -> fire(Action.DISCARD, selection));
+            add(menu, "Discard Hunk", act, () -> fire(Action.DISCARD, hunkRows(hunk)));
             menu.addSeparator();
         } else if (mode == Mode.STAGED) {
-            add(menu, "Unstage Lines", sel, () -> fire(Action.UNSTAGE, selection));
-            add(menu, "Unstage Hunk", true, () -> fire(Action.UNSTAGE, hunkRows(hunk)));
+            add(menu, "Unstage Lines", act && sel, () -> fire(Action.UNSTAGE, selection));
+            add(menu, "Unstage Hunk", act, () -> fire(Action.UNSTAGE, hunkRows(hunk)));
             menu.addSeparator();
         } else {
-            add(menu, "Reverse Lines", sel, () -> fire(Action.REVERSE, selection));
-            add(menu, "Reverse Hunk", true, () -> fire(Action.REVERSE, hunkRows(hunk)));
+            add(menu, "Reverse Lines", act && sel, () -> fire(Action.REVERSE, selection));
+            add(menu, "Reverse Hunk", act, () -> fire(Action.REVERSE, hunkRows(hunk)));
             menu.addSeparator();
         }
         add(menu, "Copy Lines", sel, this::copySelection);

@@ -16,6 +16,8 @@
 * 3 panes: log with graph / staged + unstaged files (checkbox, drag & drop) / hunk diff
 * hunk diff is lazy: only hunk headers are read when a file is selected, line texts are fetched only for the visible rows
 * stage / unstage / discard by file, hunk, or selected lines; on a commit: reverse a hunk or selected lines into the working copy
+* a bar above the hunk diff shows the file (with its status icon); its "…" (ellipsis in a circle) menu switches show / ignore whitespace and lines of context (1 – 100) like SourceTree (hunk / line actions are off while whitespace is ignored)
+* "Uncommitted changes" row in bold, "・" for its commit and author, the latest modification time of the changed files as its date
 * file menu: open (default application), resolve using mine / theirs, stop tracking, ignore… (exact file, extension, everything beneath a folder, custom pattern;
   into .gitignore, .git/info/exclude or the global ignore file), move to trash
 * commit, amend, commit message history (last 50, `-Dgitup.messageHistory=` to change)

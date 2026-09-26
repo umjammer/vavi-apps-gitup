@@ -149,6 +149,7 @@ public class RepoPanel extends JPanel {
             repo = new GitRepo(path);
             repo.setCommandLog(commandLog);
             repo.setContextLines(vavi.apps.gitup.model.Settings.get().contextLines());
+            repo.setIgnoreWhitespace(vavi.apps.gitup.model.Settings.get().ignoreWhitespace());
             return repo;
         }, r -> {
             workdir = r.workdir();
@@ -188,15 +189,16 @@ public class RepoPanel extends JPanel {
         return getRepositoryName() + (headBranch != null ? " (" + headBranch + ")" : "");
     }
 
-    /** diff colors repaint, the context lines reopen the shown diff */
+    /** diff colors repaint, the context lines and whitespace reopen the shown diff */
     private final Runnable settingsListener = () -> SwingUtilities.invokeLater(() -> {
         diff.applyFontSetting();
         diff.repaint();
         if (this.spellCheck != null) this.spellCheck.recheck();
         scheduleAutoFetch();
         int n = vavi.apps.gitup.model.Settings.get().contextLines();
+        boolean ws = vavi.apps.gitup.model.Settings.get().ignoreWhitespace();
         if (repo == null && workdir == null) return;
-        exec.run(() -> repo.setContextLines(n), () -> {
+        exec.run(() -> { repo.setContextLines(n); repo.setIgnoreWhitespace(ws); }, () -> {
             if (showingWorking) reopenCurrentFile();
             else {
                 List<FileChange> sel = staging.commitTable.selectedFiles();
@@ -236,7 +238,11 @@ public class RepoPanel extends JPanel {
         diffScroll.getViewport().setScrollMode(JViewport.SIMPLE_SCROLL_MODE); // header buttons follow the viewport
         diffScroll.getViewport().setBackground(diff.getBackground());
 
-        JSplitPane bottom = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, staging, diffScroll);
+        JPanel diffPane = new JPanel(new BorderLayout());
+        diffPane.add(new DiffToolBar(diff), BorderLayout.NORTH);
+        diffPane.add(diffScroll, BorderLayout.CENTER);
+
+        JSplitPane bottom = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, staging, diffPane);
         bottom.setResizeWeight(0.3);
         bottom.setDividerLocation(420);
         JPanel logArea = new JPanel(new BorderLayout());
@@ -614,6 +620,22 @@ public class RepoPanel extends JPanel {
         });
     }
 
+    /** @return the latest modification time of the changed files in the working copy, null when none exists (deleted only) */
+    private static java.time.Instant latestModified(Path workdir, Status s) {
+        java.time.Instant latest = null;
+        for (List<FileChange> files : List.of(s.staged(), s.unstaged())) {
+            for (FileChange f : files) {
+                try {
+                    java.time.Instant t = java.nio.file.Files.getLastModifiedTime(workdir.resolve(f.path()), java.nio.file.LinkOption.NOFOLLOW_LINKS).toInstant();
+                    if (latest == null || t.isAfter(latest)) latest = t;
+                } catch (java.io.IOException e) {
+                    // deleted
+                }
+            }
+        }
+        return latest;
+    }
+
     private void applyStatus(Status s, GitRepo.State state) {
         exec.submit(() -> repo.isHeadUnborn() ? List.<String>of() : repo.publishedIn(repo.headOid()), staging::setHeadPushed);
         adjusting = true;
@@ -624,6 +646,8 @@ public class RepoPanel extends JPanel {
         } finally {
             adjusting = false;
         }
+        Path wd = workdir;
+        exec.submit(() -> latestModified(wd, s), logPanel::setUncommittedTime);
         if (state != repoState) {
             repoState = state;
             merging = state == GitRepo.State.MERGE || state == GitRepo.State.CHERRY_PICK;

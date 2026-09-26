@@ -72,6 +72,13 @@ class SettingsTest {
         assertEquals(3, s.contextLines());
         s.setContextLines(10);
         assertEquals(10, s.contextLines());
+        s.setContextLines(100);
+        assertEquals(100, s.contextLines());
+        s.setContextLines(1000);
+        assertEquals(Settings.MAX_CONTEXT_LINES, s.contextLines());
+        assertFalse(s.ignoreWhitespace());
+        s.setIgnoreWhitespace(true);
+        assertTrue(new Settings(prefs).ignoreWhitespace());
         assertEquals("opendiff \"$LOCAL\" \"$REMOTE\"", s.diffCommand());
         s.setDiffTool(ExternalTool.CUSTOM, "mytool $LOCAL $REMOTE");
         assertEquals("mytool $LOCAL $REMOTE", s.diffCommand());
@@ -96,7 +103,7 @@ class SettingsTest {
         assertTrue(s.spellCheck());
         s.setSpellCheck(false);
         assertFalse(new Settings(prefs).spellCheck());
-        assertEquals(12, changes[0]);
+        assertEquals(15, changes[0]);
     }
 
     @Test

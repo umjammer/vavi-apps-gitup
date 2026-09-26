@@ -25,6 +25,11 @@ public final class Settings {
 
     public static final int DEFAULT_CONTEXT_LINES = 3;
 
+    /** the choices of the diff pane's menu (SourceTree's) */
+    public static final int[] CONTEXT_LINES_CHOICES = {1, 3, 6, 12, 25, 50, 100};
+
+    public static final int MAX_CONTEXT_LINES = 100;
+
     private final Preferences prefs;
     private final List<Runnable> listeners = new CopyOnWriteArrayList<>();
 
@@ -77,7 +82,17 @@ public final class Settings {
     }
 
     public void setContextLines(int n) {
-        prefs.putInt("diff.contextLines", Math.max(0, Math.min(n, 50)));
+        prefs.putInt("diff.contextLines", Math.max(0, Math.min(n, MAX_CONTEXT_LINES)));
+        changed();
+    }
+
+    /** true: whitespace differences are not shown in diffs (git diff -w) */
+    public boolean ignoreWhitespace() {
+        return prefs.getBoolean("diff.ignoreWhitespace", false);
+    }
+
+    public void setIgnoreWhitespace(boolean b) {
+        prefs.putBoolean("diff.ignoreWhitespace", b);
         changed();
     }
 

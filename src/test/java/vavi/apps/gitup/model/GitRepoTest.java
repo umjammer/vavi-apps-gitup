@@ -123,6 +123,29 @@ class GitRepoTest {
     }
 
     @Test
+    void ignoreWhitespace() throws Exception {
+        write("a.txt", BASE.replace("line3\n", "line3  \n").replace("line20\n", "LINE20\n"));
+        try (LazyPatch p = repo.openPatch(unstaged("a.txt"))) {
+            assertEquals(2, p.hunks().size());
+            assertFalse(p.isWhitespaceIgnored());
+        }
+        repo.setIgnoreWhitespace(true);
+        try (LazyPatch p = repo.openPatch(unstaged("a.txt"))) {
+            assertEquals(1, p.hunks().size(), "the whitespace change is left out");
+            assertTrue(p.isWhitespaceIgnored());
+        }
+    }
+
+    @Test
+    void contextLines() throws Exception {
+        modify();
+        repo.setContextLines(100);
+        try (LazyPatch p = repo.openPatch(unstaged("a.txt"))) {
+            assertEquals(1, p.hunks().size(), "the hunks are joined");
+        }
+    }
+
+    @Test
     void stageWholeFileAndUnstage() throws Exception {
         modify();
         repo.stage(List.of(unstaged("a.txt")));

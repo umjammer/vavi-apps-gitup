@@ -555,7 +555,7 @@ public class SettingsWindow extends JFrame {
             c.weightx = 0;
         }
 
-        JSpinner context = new JSpinner(new SpinnerNumberModel(settings.contextLines(), 0, 50, 1));
+        JSpinner context = new JSpinner(new SpinnerNumberModel(settings.contextLines(), 0, vavi.apps.gitup.model.Settings.MAX_CONTEXT_LINES, 1));
         context.addChangeListener(e -> settings.setContextLines((Integer) context.getValue()));
         JPanel general = new JPanel(new FlowLayout(FlowLayout.LEFT));
         general.add(new JLabel("Lines of context:"));
