@@ -111,29 +111,29 @@ class UiInteractionTest {
                 int h1 = patch.hunkRow(1);
 
                 // header click selects the change lines of the hunk
-                click(view, 300, h1 * rowH + rowH / 2, 0);
+                click(view, 300, view.rowY(h1) + rowH / 2, 0);
                 BitSet sel = view.getSelection();
                 assertEquals(3, sel.cardinality(), "-line 30, +LINE 30, +extra");
                 for (int r = sel.nextSetBit(0); r >= 0; r = sel.nextSetBit(r + 1)) assertTrue(patch.row(r).isChange());
 
                 // click a line, shift-click another: range of change lines
                 int first = sel.nextSetBit(0);
-                click(view, 300, first * rowH + rowH / 2, 0);
+                click(view, 300, view.rowY(first) + rowH / 2, 0);
                 assertEquals(1, view.getSelection().cardinality());
-                click(view, 300, (first + 2) * rowH + rowH / 2, InputEvent.SHIFT_DOWN_MASK);
+                click(view, 300, view.rowY(first + 2) + rowH / 2, InputEvent.SHIFT_DOWN_MASK);
                 assertEquals(3, view.getSelection().cardinality());
 
                 // cmd-click toggles one line off
-                click(view, 300, (first + 1) * rowH + rowH / 2, Keys.menu());
+                click(view, 300, view.rowY(first + 1) + rowH / 2, Keys.menu());
                 assertEquals(2, view.getSelection().cardinality());
 
                 // header of hunk 0 now has "Stage hunk" (no selection there), rightmost button
                 paint(scroll);
-                int h0y = patch.hunkRow(0) * rowH + rowH / 2;
+                int h0y = view.rowY(patch.hunkRow(0)) + rowH / 2;
                 click(view, scroll.getViewport().getWidth() - 20, h0y, 0);
                 // the hunk with the selection has "Stage lines"
                 paint(scroll);
-                click(view, scroll.getViewport().getWidth() - 20, h1 * rowH + rowH / 2, 0);
+                click(view, scroll.getViewport().getWidth() - 20, view.rowY(h1) + rowH / 2, 0);
             });
             assertEquals(2, fired.size());
             assertEquals(DiffView.Action.STAGE, fired.get(0).action());

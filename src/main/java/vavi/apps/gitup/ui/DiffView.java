@@ -80,7 +80,7 @@ public class DiffView extends JComponent implements Scrollable {
     private int ascent;
     /** hunk header row height, at least {@link #rowHeight} */
     private int headerHeight;
-    /** font of the header buttons, the diff font but not smaller than {@link #MIN_HEADER_FONT_SIZE} */
+    /** font of the header buttons, the ui button font but not smaller than {@link #MIN_HEADER_FONT_SIZE} */
     private Font buttonFont;
     private int maxChars = 80;
 
@@ -125,7 +125,9 @@ public class DiffView extends JComponent implements Scrollable {
         rowHeight = fm.getHeight() + 2;
         charWidth = fm.charWidth('m');
         ascent = fm.getAscent() + 1;
-        buttonFont = font.getSize2D() < MIN_HEADER_FONT_SIZE ? font.deriveFont(MIN_HEADER_FONT_SIZE) : font;
+        Font ui = UIManager.getFont("Button.font");
+        if (ui == null) ui = new Font(Font.DIALOG, Font.PLAIN, (int) MIN_HEADER_FONT_SIZE);
+        buttonFont = ui.getSize2D() < MIN_HEADER_FONT_SIZE ? ui.deriveFont(MIN_HEADER_FONT_SIZE) : ui;
         headerHeight = Math.max(rowHeight, getFontMetrics(buttonFont).getHeight() + 2);
     }
 
