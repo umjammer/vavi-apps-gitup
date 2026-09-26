@@ -71,6 +71,7 @@ public final class LazyPatch implements AutoCloseable {
     private final int deltaStatus;
     private final boolean binary;
     private final int mode;
+    private final boolean whitespaceIgnored;
     private final List<Hunk> hunks;
     /** row index of each hunk header */
     private final int[] hunkRowStart;
@@ -87,9 +88,11 @@ public final class LazyPatch implements AutoCloseable {
     /**
      * @param diff a diff owned by this object from now on
      * @param index delta index in the diff
+     * @param whitespaceIgnored the diff was made ignoring whitespace
      */
-    LazyPatch(Pointer diff, int index, FileChange file) {
+    LazyPatch(Pointer diff, int index, FileChange file, boolean whitespaceIgnored) {
         this.file = file;
+        this.whitespaceIgnored = whitespaceIgnored;
         handles.diff = diff;
         cleanable = cleaner.register(this, handles);
 
@@ -128,6 +131,9 @@ public final class LazyPatch implements AutoCloseable {
     public int deltaStatus() { return deltaStatus; }
 
     public boolean isBinary() { return binary; }
+
+    /** true when whitespace changes are left out, such a patch does not apply to the file as is */
+    public boolean isWhitespaceIgnored() { return whitespaceIgnored; }
 
     /** file mode (e.g. 0100644) */
     public int mode() { return mode; }

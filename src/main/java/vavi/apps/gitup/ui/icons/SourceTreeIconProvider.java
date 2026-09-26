@@ -128,6 +128,8 @@ public class SourceTreeIconProvider implements IconProvider {
             case LABEL_BRANCH -> "LogViewBranch";
             case LABEL_HEAD -> "Current Checkout";
             case LABEL_TAG -> "LogViewTag";
+            case AVATAR -> "mysteryman.tiff";
+            case PREFS_GENERAL -> "Prefs - General";
             case PREFS_ACCOUNTS -> "Prefs - Accounts";
             case PREFS_DIFF -> "Prefs - Diff";
             case PREFS_HISTORY -> "Prefs - Git";
@@ -162,7 +164,7 @@ public class SourceTreeIconProvider implements IconProvider {
         }
         for (String n : new String[] {"Repo - Fetch", "Repo - Branch", "Repo - Stash", "Discard", "Repo - Refresh", "Repo - Tag",
                 "Repo - Merge", "Branches", "Remotes", "Tags", "Stashes", "Folder",
-                "LogViewBranch", "Current Checkout", "LogViewTag", "Prefs - Accounts", "Prefs - Diff", "Prefs - Git"}) {
+                "LogViewBranch", "Current Checkout", "LogViewTag", "Prefs - General", "Prefs - Accounts", "Prefs - Diff", "Prefs - Git"}) {
             cache.computeIfAbsent(n, this::load);
         }
     }

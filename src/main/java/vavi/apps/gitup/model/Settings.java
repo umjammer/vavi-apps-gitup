@@ -25,6 +25,11 @@ public final class Settings {
 
     public static final int DEFAULT_CONTEXT_LINES = 3;
 
+    /** the choices of the diff pane's menu (SourceTree's) */
+    public static final int[] CONTEXT_LINES_CHOICES = {1, 3, 6, 12, 25, 50, 100};
+
+    public static final int MAX_CONTEXT_LINES = 100;
+
     private final Preferences prefs;
     private final List<Runnable> listeners = new CopyOnWriteArrayList<>();
 
@@ -77,7 +82,17 @@ public final class Settings {
     }
 
     public void setContextLines(int n) {
-        prefs.putInt("diff.contextLines", Math.max(0, Math.min(n, 50)));
+        prefs.putInt("diff.contextLines", Math.max(0, Math.min(n, MAX_CONTEXT_LINES)));
+        changed();
+    }
+
+    /** true: whitespace differences are not shown in diffs (git diff -w) */
+    public boolean ignoreWhitespace() {
+        return prefs.getBoolean("diff.ignoreWhitespace", false);
+    }
+
+    public void setIgnoreWhitespace(boolean b) {
+        prefs.putBoolean("diff.ignoreWhitespace", b);
         changed();
     }
 
@@ -137,6 +152,36 @@ public final class Settings {
         else prefs.put("diff.font.name", name);
         if (size <= 0) prefs.remove("diff.font.size");
         else prefs.putInt("diff.font.size", size);
+        changed();
+    }
+
+    /** SourceTree's "Check default remotes for updates every N minutes", 0: never (default 10) */
+    public int fetchInterval() {
+        return prefs.getInt("remote.fetchInterval", 10);
+    }
+
+    public void setFetchInterval(int minutes) {
+        prefs.putInt("remote.fetchInterval", Math.max(0, minutes));
+        changed();
+    }
+
+    /** checks the spelling of commit messages (macOS's spell checker), default true */
+    public boolean spellCheck() {
+        return prefs.getBoolean("commit.spellCheck", true);
+    }
+
+    public void setSpellCheck(boolean check) {
+        prefs.putBoolean("commit.spellCheck", check);
+        changed();
+    }
+
+    /** SourceTree's avatars in the commit details: GitHub (the remote's commits, noreply emails) then Gravatar, default true */
+    public boolean avatars() {
+        return prefs.getBoolean("commit.avatars", true);
+    }
+
+    public void setAvatars(boolean load) {
+        prefs.putBoolean("commit.avatars", load);
         changed();
     }
 

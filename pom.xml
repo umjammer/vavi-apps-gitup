@@ -5,7 +5,7 @@
 
   <groupId>vavi</groupId>
   <artifactId>vavi-apps-gitup</artifactId>
-  <version>0.0.2</version>
+  <version>0.0.3</version>
 
   <properties>
     <!-- a repository to open in addition to the restored tabs -->

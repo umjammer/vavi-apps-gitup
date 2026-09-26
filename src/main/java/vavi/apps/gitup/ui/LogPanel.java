@@ -96,6 +96,9 @@ public class LogPanel extends JPanel {
 
     private static final int LANE_WIDTH = 14;
 
+    /** the commit and author of "Uncommitted changes" */
+    private static final String UNCOMMITTED_MARK = "・";
+
     /** column indices: graph, description, commit, author, date */
     static final int COMMIT = 2, AUTHOR = 3, DATE_COLUMN = 4;
 
@@ -103,6 +106,8 @@ public class LogPanel extends JPanel {
     private Map<String, List<Ref>> refs = Collections.emptyMap();
     private String headBranch;
     private boolean uncommitted;
+    /** the latest modification of the changed files, the date of "Uncommitted changes" */
+    private java.time.Instant uncommittedTime;
     /** false until the first {@link #reset} */
     private boolean more;
     private boolean loading;
@@ -260,6 +265,13 @@ public class LogPanel extends JPanel {
         model.fireTableDataChanged();
     }
 
+    /** @param time the latest modification of the changed files, null for unknown */
+    public void setUncommittedTime(java.time.Instant time) {
+        if (java.util.Objects.equals(uncommittedTime, time)) return;
+        uncommittedTime = time;
+        if (uncommitted) model.fireTableCellUpdated(0, DATE_COLUMN);
+    }
+
     public boolean hasUncommitted() {
         return uncommitted;
     }
@@ -384,7 +396,12 @@ public class LogPanel extends JPanel {
 
         @Override public Object getValueAt(int r, int c) {
             CommitRow row = commitAt(r);
-            if (row == null) return c == 1 ? "Uncommitted changes" : c == 0 ? null : "";
+            if (row == null) return switch (c) { // SourceTree's
+                case 0 -> null;
+                case 1 -> "Uncommitted changes";
+                case COMMIT, AUTHOR -> UNCOMMITTED_MARK;
+                default -> uncommittedTime != null ? DATE.format(uncommittedTime) : "";
+            };
             return switch (c) {
                 case 0, 1 -> row;
                 case COMMIT -> row.shortOid();
@@ -432,13 +449,14 @@ public class LogPanel extends JPanel {
                 int baseline = (h - fm.getHeight()) / 2 + fm.getAscent();
                 int x = 4;
                 if (row == null) {
-                    g.setFont(font.deriveFont(Font.ITALIC));
+                    g.setFont(font.deriveFont(Font.BOLD));
                     g.setColor(foreground);
                     g.drawString(placeholder, x, baseline);
                     return;
                 }
                 for (Ref ref : refs.getOrDefault(row.oid(), List.of())) {
-                    x = paintLabel(g, ref, x, h) + 4;
+                    boolean head = ref.kind() == Ref.Kind.LOCAL && ref.shorthand().equals(headBranch);
+                    x = paintLabel(this, g, getFont(), ref, head, x, h) + 4;
                 }
                 g.setFont(font);
                 g.setColor(foreground);
@@ -447,37 +465,58 @@ public class LogPanel extends JPanel {
                 g.dispose();
             }
         }
+    }
 
-        /** @return the right end of the label */
-        private int paintLabel(Graphics2D g, Ref ref, int x, int h) {
-            boolean head = ref.kind() == Ref.Kind.LOCAL && ref.shorthand().equals(headBranch);
-            Color[] c = labelColors(ref.kind());
-            Font font = head ? getFont().deriveFont(Font.BOLD) : getFont();
-            java.awt.FontMetrics fm = g.getFontMetrics(font);
-            int iconSize = Math.max(12, fm.getHeight() - 2);
-            javax.swing.Icon icon = vavi.apps.gitup.ui.icons.IconProvider.get().icon(switch (ref.kind()) {
-                case TAG -> vavi.apps.gitup.ui.icons.IconProvider.Key.LABEL_TAG;
-                default -> head ? vavi.apps.gitup.ui.icons.IconProvider.Key.LABEL_HEAD : vavi.apps.gitup.ui.icons.IconProvider.Key.LABEL_BRANCH;
-            }, iconSize);
-            String text = ref.shorthand();
-            int pad = 4, gap = 3;
-            int w = pad + (icon != null ? icon.getIconWidth() + gap : 0) + fm.stringWidth(text) + pad + 1;
-            int lh = Math.min(h - 2, fm.getHeight() + 2);
-            int y = (h - lh) / 2;
-            g.setColor(c[0]);
-            g.fillRoundRect(x, y, w, lh, 6, 6);
-            g.setColor(c[1]);
-            g.drawRoundRect(x, y, w, lh, 6, 6);
-            int ix = x + pad;
-            if (icon != null) {
-                icon.paintIcon(this, g, ix, y + (lh - icon.getIconHeight()) / 2 + 1);
-                ix += icon.getIconWidth() + gap;
-            }
-            g.setFont(font);
-            g.setColor(new Color(0x111111));
-            g.drawString(text, ix, y + (lh - fm.getHeight()) / 2 + fm.getAscent() + 1);
-            return x + w;
+    /**
+     * a ref label: a rounded badge with an icon (branch, current branch, tag) and the name,
+     * vertically centered in a row of height h
+     *
+     * @return the right end of the label
+     */
+    static int paintLabel(Component c0, Graphics2D g, Font base, Ref ref, boolean head, int x, int h) {
+        Color[] c = labelColors(ref.kind());
+        Font font = head ? base.deriveFont(Font.BOLD) : base;
+        java.awt.FontMetrics fm = g.getFontMetrics(font);
+        int iconSize = Math.max(12, fm.getHeight() - 2);
+        javax.swing.Icon icon = vavi.apps.gitup.ui.icons.IconProvider.get().icon(switch (ref.kind()) {
+            case TAG -> vavi.apps.gitup.ui.icons.IconProvider.Key.LABEL_TAG;
+            default -> head ? vavi.apps.gitup.ui.icons.IconProvider.Key.LABEL_HEAD : vavi.apps.gitup.ui.icons.IconProvider.Key.LABEL_BRANCH;
+        }, iconSize);
+        String text = ref.shorthand();
+        int pad = 4, gap = 3;
+        int w = pad + (icon != null ? icon.getIconWidth() + gap : 0) + fm.stringWidth(text) + pad + 1;
+        int lh = Math.min(h - 2, fm.getHeight() + 2);
+        int y = (h - lh) / 2;
+        g.setColor(c[0]);
+        g.fillRoundRect(x, y, w, lh, 6, 6);
+        g.setColor(c[1]);
+        g.drawRoundRect(x, y, w, lh, 6, 6);
+        int ix = x + pad;
+        if (icon != null) {
+            icon.paintIcon(c0, g, ix, y + (lh - icon.getIconHeight()) / 2 + 1);
+            ix += icon.getIconWidth() + gap;
         }
+        g.setFont(font);
+        g.setColor(new Color(0x111111));
+        g.drawString(text, ix, y + (lh - fm.getHeight()) / 2 + fm.getAscent() + 1);
+        return x + w;
+    }
+
+    /** the width {@link #paintLabel} takes */
+    static int labelWidth(Graphics2D g, Font base, Ref ref, boolean head) {
+        java.awt.FontMetrics fm = g.getFontMetrics(head ? base.deriveFont(Font.BOLD) : base);
+        int iconSize = Math.max(12, fm.getHeight() - 2);
+        return 4 + iconSize + 3 + fm.stringWidth(ref.shorthand()) + 4 + 1;
+    }
+
+    /** the labels of a commit, SourceTree's order as in the log */
+    public List<Ref> refsOf(String oid) {
+        return refs.getOrDefault(oid, List.of());
+    }
+
+    /** the current branch, null when HEAD is detached */
+    public String headBranch() {
+        return headBranch;
     }
 
     /** fill and border of a ref label */

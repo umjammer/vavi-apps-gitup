@@ -60,6 +60,15 @@ public class BuiltinIconProvider implements IconProvider {
             case LABEL_BRANCH -> glyph(size, GRAY, BuiltinIconProvider::branch);
             case LABEL_HEAD -> glyph(size, GRAY, g -> { g.setStroke(new BasicStroke(3.5f)); g.drawOval(6, 6, 12, 12); });
             case LABEL_TAG -> glyph(size, GRAY, BuiltinIconProvider::tag);
+            case AVATAR -> new ScaledIcon(size, (g, s) -> {
+                g.setColor(new Color(0xc9ced6));
+                g.fill(new java.awt.geom.Ellipse2D.Double(0, 0, s, s));
+                g.setClip(new java.awt.geom.Ellipse2D.Double(0, 0, s, s));
+                g.setColor(Color.white);
+                g.fill(new java.awt.geom.Ellipse2D.Double(s * 0.32, s * 0.18, s * 0.36, s * 0.36));
+                g.fill(new java.awt.geom.Ellipse2D.Double(s * 0.14, s * 0.58, s * 0.72, s * 0.7));
+            });
+            case PREFS_GENERAL -> glyph(size, GRAY, g -> { g.drawRoundRect(6, 2, 12, 20, 3, 3); g.fillRoundRect(9, 5, 6, 7, 2, 2); });
             case PREFS_ACCOUNTS -> glyph(size, GRAY, g -> { g.drawOval(2, 2, 20, 20); g.draw(new java.awt.geom.Ellipse2D.Double(8.5, 6, 7, 7)); g.draw(new java.awt.geom.Arc2D.Double(5.5, 14, 13, 10, 0, 180, java.awt.geom.Arc2D.OPEN)); });
             case PREFS_DIFF -> glyph(size, GRAY, g -> { g.drawRoundRect(3, 2, 18, 20, 3, 3); line(g, 8, 8, 16, 8); line(g, 8, 16, 16, 16); line(g, 12, 12, 12, 20); });
             case PREFS_HISTORY -> glyph(size, GRAY, g -> { g.drawOval(2, 2, 20, 20); line(g, 12, 6, 12, 12); line(g, 12, 12, 16, 15); });

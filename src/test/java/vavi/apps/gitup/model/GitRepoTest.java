@@ -96,6 +96,22 @@ class GitRepoTest {
     }
 
     @Test
+    void signatures() throws Exception {
+        write("b.txt", "b\n");
+        sh("add", "b.txt");
+        Process p = new ProcessBuilder("git", "-c", "user.name=c", "-c", "user.email=c@example.com", "commit", "-q", "-m", "second",
+                "--author=A Author <a@example.com>", "--date=2026-01-02T03:04:05+0900").directory(dir.toFile()).redirectErrorStream(true).start();
+        assertEquals(0, p.waitFor(), new String(p.getInputStream().readAllBytes()));
+        GitRepo.Signatures s = repo.signatures(sh("rev-parse", "HEAD").strip());
+        assertEquals("A Author", s.author().name());
+        assertEquals("a@example.com", s.author().email());
+        assertEquals(java.time.OffsetDateTime.parse("2026-01-02T03:04:05+09:00").toInstant(), s.author().time().toInstant());
+        assertEquals(java.time.ZoneOffset.ofHours(9), s.author().time().getOffset());
+        assertEquals("c", s.committer().name());
+        assertEquals("c@example.com", s.committer().email());
+    }
+
+    @Test
     void status() throws Exception {
         modify();
         write("new.txt", "hello\n");
@@ -119,6 +135,29 @@ class GitRepoTest {
             Row r = p.row(p.hunkRow(1) + 4);
             assertEquals(1, p.fetchCount());
             assertNotNull(r);
+        }
+    }
+
+    @Test
+    void ignoreWhitespace() throws Exception {
+        write("a.txt", BASE.replace("line3\n", "line3  \n").replace("line20\n", "LINE20\n"));
+        try (LazyPatch p = repo.openPatch(unstaged("a.txt"))) {
+            assertEquals(2, p.hunks().size());
+            assertFalse(p.isWhitespaceIgnored());
+        }
+        repo.setIgnoreWhitespace(true);
+        try (LazyPatch p = repo.openPatch(unstaged("a.txt"))) {
+            assertEquals(1, p.hunks().size(), "the whitespace change is left out");
+            assertTrue(p.isWhitespaceIgnored());
+        }
+    }
+
+    @Test
+    void contextLines() throws Exception {
+        modify();
+        repo.setContextLines(100);
+        try (LazyPatch p = repo.openPatch(unstaged("a.txt"))) {
+            assertEquals(1, p.hunks().size(), "the hunks are joined");
         }
     }
 

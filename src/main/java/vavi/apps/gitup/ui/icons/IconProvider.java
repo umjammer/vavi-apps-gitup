@@ -34,8 +34,10 @@ public interface IconProvider {
         FOLDER, REPOSITORY,
         // ref labels in the log
         LABEL_BRANCH, LABEL_HEAD, LABEL_TAG,
+        // commit details: an author without an avatar
+        AVATAR,
         // settings tabs
-        PREFS_ACCOUNTS, PREFS_DIFF, PREFS_HISTORY,
+        PREFS_GENERAL, PREFS_ACCOUNTS, PREFS_DIFF, PREFS_HISTORY,
         // file status
         FILE_ADDED, FILE_MODIFIED, FILE_DELETED, FILE_RENAMED, FILE_UNTRACKED, FILE_CONFLICTED, FILE_TYPECHANGE
     }

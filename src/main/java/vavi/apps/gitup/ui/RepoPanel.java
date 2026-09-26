@@ -149,6 +149,7 @@ public class RepoPanel extends JPanel {
             repo = new GitRepo(path);
             repo.setCommandLog(commandLog);
             repo.setContextLines(vavi.apps.gitup.model.Settings.get().contextLines());
+            repo.setIgnoreWhitespace(vavi.apps.gitup.model.Settings.get().ignoreWhitespace());
             return repo;
         }, r -> {
             workdir = r.workdir();
@@ -158,6 +159,8 @@ public class RepoPanel extends JPanel {
             host.titleChanged(this);
             loadUndo();
             loadLogOptions();
+            spellCheck = SpellCheck.attach(staging.message, () -> vavi.apps.gitup.model.Settings.get().spellCheck());
+            scheduleAutoFetch();
             startWatcher(r.gitDir());
             refreshAll(true);
         }, e -> {
@@ -186,13 +189,16 @@ public class RepoPanel extends JPanel {
         return getRepositoryName() + (headBranch != null ? " (" + headBranch + ")" : "");
     }
 
-    /** diff colors repaint, the context lines reopen the shown diff */
+    /** diff colors repaint, the context lines and whitespace reopen the shown diff */
     private final Runnable settingsListener = () -> SwingUtilities.invokeLater(() -> {
         diff.applyFontSetting();
         diff.repaint();
+        if (this.spellCheck != null) this.spellCheck.recheck();
+        scheduleAutoFetch();
         int n = vavi.apps.gitup.model.Settings.get().contextLines();
+        boolean ws = vavi.apps.gitup.model.Settings.get().ignoreWhitespace();
         if (repo == null && workdir == null) return;
-        exec.run(() -> repo.setContextLines(n), () -> {
+        exec.run(() -> { repo.setContextLines(n); repo.setIgnoreWhitespace(ws); }, () -> {
             if (showingWorking) reopenCurrentFile();
             else {
                 List<FileChange> sel = staging.commitTable.selectedFiles();
@@ -209,6 +215,7 @@ public class RepoPanel extends JPanel {
     public void close() {
         vavi.apps.gitup.model.Settings.get().removeListener(settingsListener);
         watchTimer.stop();
+        if (autoFetchTimer != null) autoFetchTimer.stop();
         if (watcher != null) {
             watcher.close();
             watcher = null;
@@ -217,6 +224,7 @@ public class RepoPanel extends JPanel {
         exec.run(() -> {
             if (shown != null) shown.close();
             if (remote != null) remote.close();
+            if (quietRemote != null) quietRemote.close();
             if (log != null) log.close();
             if (repo != null) repo.close();
         }, null);
@@ -230,7 +238,11 @@ public class RepoPanel extends JPanel {
         diffScroll.getViewport().setScrollMode(JViewport.SIMPLE_SCROLL_MODE); // header buttons follow the viewport
         diffScroll.getViewport().setBackground(diff.getBackground());
 
-        JSplitPane bottom = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, staging, diffScroll);
+        JPanel diffPane = new JPanel(new BorderLayout());
+        diffPane.add(new DiffToolBar(diff), BorderLayout.NORTH);
+        diffPane.add(diffScroll, BorderLayout.CENTER);
+
+        JSplitPane bottom = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, staging, diffPane);
         bottom.setResizeWeight(0.3);
         bottom.setDividerLocation(420);
         JPanel logArea = new JPanel(new BorderLayout());
@@ -328,6 +340,10 @@ public class RepoPanel extends JPanel {
             if (e.getValueIsAdjusting() || adjusting) return;
             List<FileChange> sel = staging.commitTable.selectedFiles();
             if (sel.size() == 1 && selectedCommit != null) showCommitFile(rangeOldest, selectedCommit, sel.getFirst());
+        });
+        staging.commitInfo.setParentListener(oid -> {
+            pendingReveal = null;
+            revealCommit(oid);
         });
         staging.commitButton.addActionListener(e -> commit());
         staging.stageAllButton.addActionListener(e -> {
@@ -608,6 +624,22 @@ public class RepoPanel extends JPanel {
         });
     }
 
+    /** @return the latest modification time of the changed files in the working copy, null when none exists (deleted only) */
+    private static java.time.Instant latestModified(Path workdir, Status s) {
+        java.time.Instant latest = null;
+        for (List<FileChange> files : List.of(s.staged(), s.unstaged())) {
+            for (FileChange f : files) {
+                try {
+                    java.time.Instant t = java.nio.file.Files.getLastModifiedTime(workdir.resolve(f.path()), java.nio.file.LinkOption.NOFOLLOW_LINKS).toInstant();
+                    if (latest == null || t.isAfter(latest)) latest = t;
+                } catch (java.io.IOException e) {
+                    // deleted
+                }
+            }
+        }
+        return latest;
+    }
+
     private void applyStatus(Status s, GitRepo.State state) {
         exec.submit(() -> repo.isHeadUnborn() ? List.<String>of() : repo.publishedIn(repo.headOid()), staging::setHeadPushed);
         adjusting = true;
@@ -618,6 +650,8 @@ public class RepoPanel extends JPanel {
         } finally {
             adjusting = false;
         }
+        Path wd = workdir;
+        exec.submit(() -> latestModified(wd, s), logPanel::setUncommittedTime);
         if (state != repoState) {
             repoState = state;
             merging = state == GitRepo.State.MERGE || state == GitRepo.State.CHERRY_PICK;
@@ -649,8 +683,9 @@ public class RepoPanel extends JPanel {
         showingWorking = false;
         selectedCommit = c.oid();
         rangeOldest = c.oid();
-        staging.showCommit(c);
+        staging.showCommit(c, logPanel.refsOf(c.oid()), logPanel.headBranch(), gitHubRemote());
         String oid = c.oid();
+        exec.submit(() -> repo.signatures(oid), sigs -> staging.commitInfo.setSignatures(oid, sigs));
         exec.submit(() -> repo.commitFiles(oid), files -> {
             if (!oid.equals(selectedCommit)) return;
             adjusting = true;
@@ -667,6 +702,17 @@ public class RepoPanel extends JPanel {
                 setDiff(null, DiffView.Mode.COMMIT, "No changes");
             }
         });
+    }
+
+    /** the URL of a github.com remote ("origin" first) for the avatars, null when none */
+    private String gitHubRemote() {
+        String url = null;
+        for (GitRepo.Remote r : remotes) {
+            if (vavi.apps.gitup.model.Avatars.gitHubCommit(r.url(), "") == null) continue;
+            if (r.name().equals("origin")) return r.url();
+            if (url == null) url = r.url();
+        }
+        return url;
     }
 
     /** several commits: the files changed over the whole range, like SourceTree */
@@ -1218,8 +1264,13 @@ public class RepoPanel extends JPanel {
     /** selects the commit of the hit (loading log pages until it appears), then its file and line */
     private void reveal(Hit hit) {
         pendingReveal = hit;
+        revealCommit(hit.oid());
+    }
+
+    /** selects the commit, loading log pages until it appears */
+    private void revealCommit(String oid) {
         logPanel.getTable().clearSelection(); // re-selecting the same commit reloads its files
-        if (logPanel.select(hit.oid())) return;
+        if (logPanel.select(oid)) return;
         exec.submit(() -> {
             if (log == null) return null;
             List<CommitRow> more = new ArrayList<>();
@@ -1227,12 +1278,12 @@ public class RepoPanel extends JPanel {
             while (!found && !log.isDone()) {
                 List<CommitRow> page = log.next(PAGE);
                 more.addAll(page);
-                found = page.stream().anyMatch(r -> r.oid().equals(hit.oid()));
+                found = page.stream().anyMatch(r -> r.oid().equals(oid));
             }
             return new Page(log, more, !log.isDone());
         }, p -> {
             if (p != null && p.log() == shownLog) logPanel.append(p.rows(), p.more());
-            if (!logPanel.select(hit.oid())) statusBar.setText("not in the log: " + hit.oid().substring(0, 7));
+            if (!logPanel.select(oid)) statusBar.setText("not in the log: " + oid.substring(0, 7));
         });
     }
 
@@ -1521,7 +1572,11 @@ public class RepoPanel extends JPanel {
         switch (ref.kind()) {
             case LOCAL -> {
                 if (ref.shorthand().equals(headBranch)) return;
-                exec.run(() -> repo.checkout(ref.shorthand()), () -> refreshAll(true));
+                // the upstream may have moved on the server (a merged pull request): the badges after a fetch
+                exec.run(() -> repo.checkout(ref.shorthand()), () -> {
+                    refreshAll(true);
+                    autoFetch();
+                });
             }
             case REMOTE -> exec.run(() -> repo.checkoutRemote(ref.shorthand()), () -> refreshAll(true));
             default -> {}
@@ -1902,6 +1957,74 @@ public class RepoPanel extends JPanel {
             }
             refreshAll(false);
         });
+    }
+
+    // background fetch
+
+    /** the commit message box's spell checking */
+    private SpellCheck spellCheck;
+
+    /** SourceTree's "Check default remotes for updates every N minutes" */
+    private javax.swing.Timer autoFetchTimer;
+    /** a fetch of its own: never asks, the saved accounts only */
+    private RemoteOps quietRemote;
+    private volatile boolean autoFetching;
+
+    /** (re)starts the periodic fetch of the setting, the first one a little after the tab opened */
+    private void scheduleAutoFetch() {
+        if (workdir == null) return;
+        int minutes = vavi.apps.gitup.model.Settings.get().fetchInterval();
+        if (autoFetchTimer != null) {
+            if (minutes > 0 && autoFetchTimer.getDelay() == minutes * 60_000) return; // unchanged
+            autoFetchTimer.stop();
+            autoFetchTimer = null;
+        }
+        if (minutes <= 0) return;
+        autoFetchTimer = new javax.swing.Timer(minutes * 60_000, e -> autoFetch());
+        autoFetchTimer.setInitialDelay(5_000);
+        autoFetchTimer.start();
+    }
+
+    /**
+     * fetches all remotes quietly so that the badges and the log show what happened on the server.
+     * skipped while a remote operation of the user runs, failures only go to the log.
+     */
+    private void autoFetch() {
+        if (repo == null || autoFetching || vavi.apps.gitup.model.Settings.get().fetchInterval() <= 0) return;
+        if (!fetchAction.isEnabled()) return; // the user's fetch / pull / push is running
+        autoFetching = true;
+        exec.submit(() -> {
+            if (quietRemote == null) quietRemote = new RemoteOps(repo.workdir(), quietPrompter(), s -> {});
+            quietRemote.fetchAll();
+            return null;
+        }, x -> {
+            autoFetching = false;
+            refreshAll(false);
+        }, e -> {
+            autoFetching = false;
+            logger.log(System.Logger.Level.DEBUG, "background fetch: " + e.getMessage());
+        });
+    }
+
+    /** a saved account once per url and fetch, never a dialog */
+    private RemoteOps.Prompter quietPrompter() {
+        java.util.Set<String> tried = java.util.concurrent.ConcurrentHashMap.newKeySet();
+        return new RemoteOps.Prompter() {
+            @Override public String[] userPassword(String url, String user) {
+                if (!tried.add(url)) return null;
+                try {
+                    vavi.apps.gitup.model.Accounts.Account a = vavi.apps.gitup.model.Accounts.get().find(url, user);
+                    String secret = a != null ? vavi.apps.gitup.model.Accounts.get().secret(a) : null;
+                    return secret != null ? new String[] {a.username(), secret} : null;
+                } catch (RuntimeException e) {
+                    return null;
+                }
+            }
+
+            @Override public String passphrase(String url, String privateKeyPath) {
+                return null;
+            }
+        };
     }
 
     private void fetch() {

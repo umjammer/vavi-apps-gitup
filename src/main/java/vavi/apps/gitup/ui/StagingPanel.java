@@ -23,9 +23,9 @@ import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
 import javax.swing.JTextArea;
 import javax.swing.KeyStroke;
-import javax.swing.UIManager;
 
 import vavi.apps.gitup.model.CommitLog.CommitRow;
+import vavi.apps.gitup.model.GitRepo.Ref;
 
 
 /**
@@ -58,7 +58,7 @@ public class StagingPanel extends JPanel {
 
     private final JLabel stagedLabel = new JLabel();
     private final JLabel unstagedLabel = new JLabel();
-    private final JTextArea commitInfo = new JTextArea();
+    final CommitInfoPanel commitInfo = new CommitInfoPanel();
 
     public StagingPanel() {
         setLayout(cards);
@@ -117,20 +117,20 @@ public class StagingPanel extends JPanel {
         WindowState.remember(working, "split.commitBox");
 
         // a commit
-        commitInfo.setEditable(false);
-        // a plain (non UIResource) color, so the look and feel does not gray out the read-only text
-        java.awt.Color white = UIManager.getColor("TextArea.background");
-        commitInfo.setBackground(new java.awt.Color(white != null ? white.getRGB() : 0xffffff));
-        commitInfo.setLineWrap(true);
-        commitInfo.setWrapStyleWord(true);
-        commitInfo.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
-        JSplitPane commit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, new JScrollPane(commitInfo), new JScrollPane(commitTable));
+        JSplitPane commit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, scrolled(commitInfo), new JScrollPane(commitTable));
         commit.setResizeWeight(0.3);
         commit.setBorder(null);
         add(commit, "commit");
         WindowState.remember(commit, "split.commitInfo");
 
         setCounts(0, 0);
+    }
+
+    private static JScrollPane scrolled(CommitInfoPanel info) {
+        JScrollPane s = new JScrollPane(info);
+        s.getViewport().setBackground(info.getBackground());
+        s.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        return s;
     }
 
     private static JPanel titled(JLabel label, JButton button, FileTable table) {
@@ -197,23 +197,14 @@ public class StagingPanel extends JPanel {
     }
 
     /** a multiple selection: the commits of the range, oldest parent to newest */
-    public void showCommits(java.util.List<CommitRow> commits) {
-        StringBuilder sb = new StringBuilder(commits.size() + " commits selected, changes from "
-                + commits.getLast().shortOid() + "^ to " + commits.getFirst().shortOid() + "\n\n");
-        for (CommitRow c : commits) sb.append(c.shortOid()).append("  ").append(c.summary()).append("  (").append(c.author()).append(")\n");
-        commitInfo.setText(sb.toString());
-        commitInfo.setCaretPosition(0);
+    public void showCommits(List<CommitRow> commits) {
+        commitInfo.showCommits(commits);
         cards.show(this, "commit");
     }
 
-    public void showCommit(CommitRow c) {
-        commitInfo.setText("commit " + c.oid() + "\n"
-                + (c.parents().isEmpty() ? "" : "parents " + String.join(" ", c.parents().stream().map(p -> p.substring(0, 7)).toList()) + "\n")
-                + "author " + c.author() + " <" + c.email() + ">\n"
-                + "date   " + java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss Z")
-                        .withZone(java.time.ZoneId.systemDefault()).format(c.time()) + "\n\n"
-                + c.message());
-        commitInfo.setCaretPosition(0);
+    /** @see CommitInfoPanel#showCommit */
+    public void showCommit(CommitRow c, List<Ref> refs, String headBranch, String gitHubRemote) {
+        commitInfo.showCommit(c, refs, headBranch, gitHubRemote);
         cards.show(this, "commit");
     }
 }
