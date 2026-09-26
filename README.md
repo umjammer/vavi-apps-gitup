@@ -48,6 +48,8 @@ $ mvn exec:exec -Drepo=/path/to/repository
 
 ## TODO
 
+ - app icon
+
 ---
 
 <sub>image designed by @umjammer, drawn by nano banana</sub>
