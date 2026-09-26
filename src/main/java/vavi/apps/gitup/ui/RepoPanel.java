@@ -557,7 +557,9 @@ public class RepoPanel extends JPanel {
                 more = !log.isDone();
             }
             Map<String, List<Ref>> byTarget = new HashMap<>();
-            for (Ref r : refs) {
+            List<Ref> labels = new ArrayList<>(refs);
+            labels.addAll(repo.remoteHeads()); // "origin/HEAD" as SourceTree shows it
+            for (Ref r : labels) {
                 if (r.target() == null || (!options.remotes() && r.kind() == Ref.Kind.REMOTE)) continue; // hidden remote branches: no labels
                 byTarget.computeIfAbsent(r.target(), k -> new ArrayList<>()).add(r);
             }

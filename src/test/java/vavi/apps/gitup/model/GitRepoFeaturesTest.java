@@ -21,6 +21,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import vavi.apps.gitup.jna.GitUpKitLocator;
 import vavi.apps.gitup.model.CommitLog.CommitRow;
+import vavi.apps.gitup.model.GitRepo.Ref;
 import vavi.apps.gitup.model.GitRepo.IgnorePatterns;
 import vavi.apps.gitup.model.GitRepo.IgnoreTarget;
 import vavi.apps.gitup.model.GitRepo.PullResult;
@@ -319,6 +320,23 @@ class GitRepoFeaturesTest {
         assertEquals(CommitLog.Options.DEFAULT, CommitLog.Options.decode("garbage"));
         CommitLog.Options o = new CommitLog.Options(false, false, false);
         assertEquals(o, CommitLog.Options.decode(o.encode()));
+    }
+
+    /** SourceTree's "origin/HEAD" label: in the log labels, not among the branches */
+    @Test
+    void remoteHead() throws Exception {
+        Path b = setupClone();
+        commitInB(b, 2, "two");
+        try (GitRepo repo = new GitRepo(b)) {
+            String originMain = repo.revparse("origin/main");
+            List<Ref> heads = repo.remoteHeads();
+            assertEquals(List.of("origin/HEAD"), heads.stream().map(Ref::shorthand).toList());
+            assertEquals(Ref.Kind.REMOTE, heads.getFirst().kind());
+            assertEquals(originMain, heads.getFirst().target(), "resolved to what it points to");
+            assertFalse(repo.refs().stream().anyMatch(r -> r.shorthand().equals("origin/HEAD")), "not a branch");
+            assertEquals(List.of("origin/main", "origin/HEAD"),
+                    repo.refsByTarget().get(originMain).stream().map(Ref::shorthand).filter(n -> n.startsWith("origin/")).toList());
+        }
     }
 
     /** the repository browser's counts */
