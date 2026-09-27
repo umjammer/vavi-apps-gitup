@@ -8,6 +8,13 @@
   import SourceTree's bookmarks (Repository Browser menu), expanded / collapsed groups are remembered,
   ahead ↑ / behind ↓ counts of the current branch against its upstream (as of the last fetch, recomputed when the window
   is activated or with ⌘R)
+* move a folder with its history between repositories: select two repositories in the repository browser (⌘ click),
+  "Move Folder Between Repositories…" (menu or right click), drag a folder from the left tree onto a folder (or the top)
+  of the right tree, confirm. at the top: `git subtree split` in the source, then `git checkout --orphan`, `pull`, `checkout`,
+  `merge --allow-unrelated-histories` in the target; as a folder: `git subtree add -P`. options: delete the split branch,
+  keep / stop tracking (`git rm -r --cached`) / remove (`git rm -r`) the folder in the source (staged, not committed).
+  the target must be on a branch without uncommitted changes, a failure puts it back on its branch.
+  the commands are shown in the dialog's log and added to the command history of the repositories open in tabs
 * search (⌘F) the whole history: commit messages, file names and changed lines, a result jumps to the commit, file and line
 * SourceTree-like looks: light blue repository browser icons, ref labels with icons in the log (branch, current branch, tag),
   settings tabs with icons
@@ -95,4 +102,6 @@ without a repository the last session's tabs are restored, or the repository bro
   while it is shown the git thread keeps running the dialog's tasks. GitUp does not swap with a root commit
 * "Edit Author" makes a copy of the commit with libgit2 (`git_commit_amend`, the author date is kept),
   then GitUp's `GCHistory` rewrite replaces the commit with it
+* moving a folder between repositories runs the git command (libgit2 has no `git subtree`): `-Dgitup.git=`,
+  `/opt/homebrew/bin/git`, `/usr/local/bin/git`, then `/usr/bin/git`
 * github credential needs "contents" and "workflow" both "rw" 

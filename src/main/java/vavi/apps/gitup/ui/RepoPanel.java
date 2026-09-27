@@ -1198,6 +1198,11 @@ public class RepoPanel extends JPanel {
     private final vavi.apps.gitup.model.CommandLog commandLog = new vavi.apps.gitup.model.CommandLog();
     private CommandHistory commandHistory;
 
+    /** the equivalent git commands of what was done in this tab, also by others (e.g. a subtree move) */
+    public vavi.apps.gitup.model.CommandLog commandLog() {
+        return commandLog;
+    }
+
     private void showCommandHistory() {
         if (commandHistory == null || !commandHistory.isDisplayable()) {
             commandHistory = new CommandHistory(this, getRepositoryName(), commandLog);

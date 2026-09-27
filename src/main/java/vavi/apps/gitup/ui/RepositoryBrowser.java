@@ -217,6 +217,45 @@ public class RepositoryBrowser extends JFrame {
         }
     }
 
+    // move a folder between repositories
+
+    /** repository → the command history of its tab, null when not open */
+    private java.util.function.Function<Path, vavi.apps.gitup.model.CommandLog> commandLogs = p -> null;
+
+    /** @param commandLogs repository → the command history of its tab, null when not open */
+    public void setCommandLogs(java.util.function.Function<Path, vavi.apps.gitup.model.CommandLog> commandLogs) {
+        this.commandLogs = commandLogs;
+    }
+
+    /** the selected repositories, in the order of the tree */
+    private List<Repo> selectedRepos() {
+        List<Repo> repos = new ArrayList<>();
+        TreePath[] paths = tree.getSelectionPaths();
+        if (paths == null) return repos;
+        java.util.Arrays.sort(paths, java.util.Comparator.comparingInt(tree::getRowForPath));
+        for (TreePath p : paths) {
+            if (((DefaultMutableTreeNode) p.getLastPathComponent()).getUserObject() instanceof Repo r) repos.add(r);
+        }
+        return repos;
+    }
+
+    /** moves a folder with its history from one of the two selected repositories to the other */
+    void moveFolder() {
+        List<Repo> repos = selectedRepos();
+        if (repos.size() != 2) {
+            JOptionPane.showMessageDialog(this, "Select two repositories (⌘ click) to move a folder between them.", "Move Folder Between Repositories",
+                    JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        for (Repo r : repos) {
+            if (!Files.exists(r.path().resolve(".git"))) {
+                JOptionPane.showMessageDialog(this, "Not a git working directory:\n" + r.path(), "Move Folder Between Repositories", JOptionPane.WARNING_MESSAGE);
+                return;
+            }
+        }
+        new SubtreeMoveDialog(this, repos.get(0).path(), repos.get(1).path(), commandLogs).setVisible(true);
+    }
+
     /** reflects the bookmarks (after an outside change, e.g. a repository opened from the menu) */
     public void reload() {
         rebuild();
@@ -348,6 +387,11 @@ public class RepositoryBrowser extends JFrame {
         refresh.addActionListener(e -> refreshStatus());
         menu.add(refresh);
         menu.addSeparator();
+        JMenuItem moveFolder = new JMenuItem("Move Folder Between Repositories…");
+        moveFolder.setToolTipText("select two repositories, then move a folder with its history from one to the other");
+        moveFolder.addActionListener(e -> moveFolder());
+        menu.add(moveFolder);
+        menu.addSeparator();
         JMenuItem settings = new JMenuItem("Settings…");
         settings.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_COMMA, Keys.menu()));
         settings.addActionListener(e -> SettingsWindow.open());
@@ -448,9 +492,15 @@ public class RepositoryBrowser extends JFrame {
 
     private void popup(MouseEvent e) {
         TreePath p = tree.getPathForLocation(e.getX(), e.getY());
+        if (p != null && !tree.isPathSelected(p)) tree.setSelectionPath(p); // keeps a multiple selection
+        JPopupMenu menu = new JPopupMenu();
+        if (selectedRepos().size() == 2) {
+            item(menu, "Move Folder Between Repositories…", this::moveFolder);
+            menu.show(tree, e.getX(), e.getY());
+            return;
+        }
         if (p != null) tree.setSelectionPath(p);
         Entry entry = selectedEntry();
-        JPopupMenu menu = new JPopupMenu();
         if (entry instanceof Repo r) {
             item(menu, "Open", () -> opener.accept(r.path()));
             item(menu, "Show in Finder", () -> {
