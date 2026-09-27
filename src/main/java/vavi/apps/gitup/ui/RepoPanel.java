@@ -127,7 +127,7 @@ public class RepoPanel extends JPanel {
     private List<GitRepo.Remote> remotes = List.of();
     /** the oldest commit of a multiple selection shown in the lower panes, equals selectedCommit for one */
     private String rangeOldest;
-    /** the working copy file whose diff is shown */
+    /** the working copy file whose diff is shown, kept while a commit is shown to come back to it */
     private FileChange currentFile;
     private boolean adjusting;
     private boolean merging;
@@ -199,7 +199,7 @@ public class RepoPanel extends JPanel {
         boolean ws = vavi.apps.gitup.model.Settings.get().ignoreWhitespace();
         if (repo == null && workdir == null) return;
         exec.run(() -> { repo.setContextLines(n); repo.setIgnoreWhitespace(ws); }, () -> {
-            if (showingWorking) reopenCurrentFile();
+            if (showingWorking) reopenCurrentFile(true);
             else {
                 List<FileChange> sel = staging.commitTable.selectedFiles();
                 if (sel.size() == 1 && selectedCommit != null) showCommitFile(rangeOldest, selectedCommit, sel.getFirst());
@@ -620,7 +620,7 @@ public class RepoPanel extends JPanel {
                 return;
             }
             applyStatus(s.getKey(), s.getValue());
-            if (showingWorking) reopenCurrentFile();
+            if (showingWorking) reopenCurrentFile(true);
         });
     }
 
@@ -677,7 +677,7 @@ public class RepoPanel extends JPanel {
             showingWorking = true;
             selectedCommit = null;
             staging.showWorking();
-            reopenCurrentFile();
+            reopenCurrentFile(false);
             return;
         }
         showingWorking = false;
@@ -689,6 +689,7 @@ public class RepoPanel extends JPanel {
         exec.submit(() -> repo.commitFiles(oid), files -> {
             if (!oid.equals(selectedCommit)) return;
             adjusting = true;
+            staging.commitTable.clearSelection(); // a kept selection would not fire for the new commit
             staging.commitTable.setFiles(files);
             adjusting = false;
             int row = 0;
@@ -727,6 +728,7 @@ public class RepoPanel extends JPanel {
         exec.submit(() -> repo.rangeFiles(oldest, newest), files -> {
             if (!newest.equals(selectedCommit) || !oldest.equals(rangeOldest)) return;
             adjusting = true;
+            staging.commitTable.clearSelection(); // a kept selection would not fire for the new commit
             staging.commitTable.setFiles(files);
             adjusting = false;
             if (!files.isEmpty()) staging.commitTable.setRowSelectionInterval(0, 0);
@@ -748,7 +750,7 @@ public class RepoPanel extends JPanel {
     private void showFile(FileChange f, boolean keepPosition) {
         currentFile = f;
         exec.submit(() -> repo.openPatch(f), p -> {
-            if (currentFile != f) {
+            if (currentFile != f || !showingWorking) {
                 if (p != null) exec.run(p::close, null);
                 return;
             }
@@ -763,7 +765,6 @@ public class RepoPanel extends JPanel {
 
     /** shows a file changed from the parent of oldest to newest (the same commit for one) */
     private void showCommitFile(String oldest, String oid, FileChange f) {
-        currentFile = null;
         exec.submit(() -> repo.openPatch(oldest, oid, f), p -> {
             if (!oid.equals(selectedCommit) || !oldest.equals(rangeOldest)) {
                 if (p != null) exec.run(p::close, null);
@@ -784,25 +785,32 @@ public class RepoPanel extends JPanel {
         if (old != null) exec.run(old::close, null);
     }
 
-    /** after a change: re-select the current file on the same side, or clear the diff */
-    private void reopenCurrentFile() {
+    /**
+     * after a change or back from a commit: re-select the current file on the same side,
+     * or clear the diff and the selection (a still selected row would not fire when clicked)
+     *
+     * @param keepPosition keep the scroll position (the same file is shown)
+     */
+    private void reopenCurrentFile(boolean keepPosition) {
         FileChange f = currentFile;
-        if (f == null) {
-            setDiff(null, DiffView.Mode.UNSTAGED, "Select a file");
-            return;
-        }
-        FileTable table = f.staged() ? staging.stagedTable : staging.unstagedTable;
-        FileChange now = table.getFiles().stream().filter(x -> x.path().equals(f.path())).findFirst().orElse(null);
-        if (now == null) {
-            currentFile = null;
-            setDiff(null, DiffView.Mode.UNSTAGED, "Select a file");
-            return;
-        }
+        FileTable table = f == null ? null : f.staged() ? staging.stagedTable : staging.unstagedTable;
+        FileChange now = f == null ? null : table.getFiles().stream().filter(x -> x.path().equals(f.path())).findFirst().orElse(null);
         adjusting = true;
-        int i = table.getFiles().indexOf(now);
-        table.setRowSelectionInterval(i, i);
-        adjusting = false;
-        showFile(now, true);
+        try {
+            if (now == null) {
+                currentFile = null;
+                staging.stagedTable.clearSelection();
+                staging.unstagedTable.clearSelection();
+                setDiff(null, DiffView.Mode.UNSTAGED, "Select a file");
+                return;
+            }
+            (table == staging.stagedTable ? staging.unstagedTable : staging.stagedTable).clearSelection();
+            int i = table.getFiles().indexOf(now);
+            table.setRowSelectionInterval(i, i);
+        } finally {
+            adjusting = false;
+        }
+        showFile(now, keepPosition);
     }
 
     // working copy actions

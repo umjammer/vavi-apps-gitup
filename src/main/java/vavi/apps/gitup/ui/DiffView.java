@@ -403,7 +403,17 @@ public class DiffView extends JComponent implements Scrollable {
     }
 
     private void paintHeaderButtons(Graphics2D g, int hunk, Rectangle visible, int y) {
-        if (!actionsEnabled()) return;
+        if (!actionsEnabled()) {
+            // whitespace changes are left out: tell why there are no buttons
+            String hint = "Show Whitespace to use the hunk actions";
+            Font font = g.getFont();
+            g.setFont(buttonFont);
+            FontMetrics fm = g.getFontMetrics();
+            g.setColor(Color.gray);
+            g.drawString(hint, visible.x + visible.width - 6 - fm.stringWidth(hint), y + (headerHeight - fm.getHeight()) / 2 + fm.getAscent());
+            g.setFont(font);
+            return;
+        }
         boolean lines = hunkHasSelection(hunk);
         String what = lines ? "lines" : "hunk";
         List<Object[]> list = new ArrayList<>();

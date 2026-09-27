@@ -150,6 +150,18 @@ class GitRepoTest {
             assertEquals(1, p.hunks().size(), "the whitespace change is left out");
             assertTrue(p.isWhitespaceIgnored());
         }
+        // nothing left out: the patch applies as is, the actions stay usable
+        write("a.txt", BASE.replace("line20\n", "LINE20\n"));
+        try (LazyPatch p = repo.openPatch(unstaged("a.txt"))) {
+            assertEquals(1, p.hunks().size());
+            assertFalse(p.isWhitespaceIgnored());
+        }
+        // an indentation change inside the hunk is left out too
+        write("a.txt", BASE.replace("line19\n", "  line19\n").replace("line20\n", "LINE20\n"));
+        try (LazyPatch p = repo.openPatch(unstaged("a.txt"))) {
+            assertEquals(1, p.hunks().size());
+            assertTrue(p.isWhitespaceIgnored());
+        }
     }
 
     @Test
