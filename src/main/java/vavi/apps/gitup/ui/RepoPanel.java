@@ -130,6 +130,8 @@ public class RepoPanel extends JPanel {
     /** the working copy file whose diff is shown, kept while a commit is shown to come back to it */
     private FileChange currentFile;
     private boolean adjusting;
+    /** selects the first staged file on the next status update, after staging */
+    private boolean selectFirstStaged;
     private boolean merging;
     /** the repository state last shown */
     private GitRepo.State repoState = GitRepo.State.NONE;
@@ -298,6 +300,7 @@ public class RepoPanel extends JPanel {
         });
         FileTable.Listener files = new FileTable.Listener() {
             @Override public void move(FileTable source, List<FileChange> list) {
+                if (!source.isStaged()) selectFirstStaged = true;
                 exec.run(() -> {
                     if (source.isStaged()) repo.unstage(list);
                     else repo.stage(list);
@@ -350,6 +353,7 @@ public class RepoPanel extends JPanel {
         staging.commitButton.addActionListener(e -> commit());
         staging.stageAllButton.addActionListener(e -> {
             List<FileChange> all = staging.unstagedTable.getFiles();
+            selectFirstStaged = true;
             exec.run(() -> repo.stage(all), this::refreshStatus);
         });
         staging.unstageAllButton.addActionListener(e -> {
@@ -651,6 +655,15 @@ public class RepoPanel extends JPanel {
             staging.setCounts(s.staged().size(), s.unstaged().size());
         } finally {
             adjusting = false;
+        }
+        if (selectFirstStaged) {
+            selectFirstStaged = false;
+            if (showingWorking && staging.stagedTable.getRowCount() > 0) {
+                staging.stagedTable.clearSelection(); // a kept selection would not fire
+                staging.stagedTable.setRowSelectionInterval(0, 0);
+                staging.stagedTable.scrollRectToVisible(staging.stagedTable.getCellRect(0, 0, true));
+            }
+            staging.stagedTable.requestFocusInWindow();
         }
         Path wd = workdir;
         exec.submit(() -> latestModified(wd, s), logPanel::setUncommittedTime);
