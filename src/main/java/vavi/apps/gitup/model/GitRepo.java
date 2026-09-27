@@ -1627,6 +1627,15 @@ public class GitRepo implements AutoCloseable {
         check(git.git_stash_drop(handle(), new NativeLong(index)), "stash drop");
     }
 
+    /** drops every stash */
+    public void stashClear() {
+        cmd("git stash clear");
+        // dropping stash@{0} shifts the rest down
+        for (int i = stashes().size(); i > 0; i--) {
+            check(git.git_stash_drop(handle(), new NativeLong(0)), "stash drop");
+        }
+    }
+
     // ignore / tracking
 
     /** where an ignore pattern is written */

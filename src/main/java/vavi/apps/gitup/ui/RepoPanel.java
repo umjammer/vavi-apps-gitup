@@ -286,6 +286,8 @@ public class RepoPanel extends JPanel {
             @Override public void stashApply(Stash stash, boolean drop) { RepoPanel.this.stashApply(stash, drop); }
             @Override public void stashDrop(Stash stash) { RepoPanel.this.stashDrop(stash); }
             @Override public void showStash(Stash stash) { RepoPanel.this.showStash(stash); }
+            @Override public void stash() { RepoPanel.this.stash(); }
+            @Override public void stashClear() { RepoPanel.this.stashClear(); }
             @Override public void newBranch() { RepoPanel.this.newBranch(null); }
             @Override public void renameBranch(Ref branch) { RepoPanel.this.renameBranch(branch); }
             @Override public void deleteBranch(Ref branch) { RepoPanel.this.deleteBranches(branch); }
@@ -1521,7 +1523,7 @@ public class RepoPanel extends JPanel {
                     JPanel p = new JPanel(new BorderLayout(0, 6));
                     p.add(new JLabel("Squashed commit message:"), BorderLayout.NORTH);
                     p.add(new JScrollPane(text), BorderLayout.CENTER);
-                    if (JOptionPane.showConfirmDialog(this, p, "Squash Into Parent", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) return;
+                    if (JOptionPane.showConfirmDialog(this, p, "Squash Into " + parent.shortOid(), JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) return;
                     message = text.getText().strip();
                     if (message.isEmpty()) return;
                 }
@@ -1934,6 +1936,11 @@ public class RepoPanel extends JPanel {
     private void stashDrop(Stash stash) {
         if (!confirm("Delete the stash \"" + stash.message() + "\"?\nThis cannot be undone.", "Delete Stash")) return;
         exec.run(() -> repo.stashDrop(stash.index()), () -> refreshAll(false));
+    }
+
+    private void stashClear() {
+        if (!confirm("Delete all stashes?\nThis cannot be undone.", "Delete All Stashes")) return;
+        exec.run(repo::stashClear, () -> refreshAll(false));
     }
 
     // remote

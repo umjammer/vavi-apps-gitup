@@ -49,6 +49,10 @@ public class SidebarPanel extends JPanel {
         void stashDrop(Stash stash);
         /** shows the stash's changes */
         void showStash(Stash stash);
+        /** stashes the working copy changes */
+        void stash();
+        /** deletes every stash */
+        void stashClear();
         void newBranch();
         void renameBranch(Ref branch);
         /** asks which local branches to delete, the given one checked */
@@ -183,6 +187,10 @@ public class SidebarPanel extends JPanel {
         JPopupMenu menu = new JPopupMenu();
         if (node == branches) {
             item(menu, "New Branch…", listener::newBranch);
+        } else if (node == stashes) {
+            item(menu, "Stash Changes…", listener::stash);
+            menu.addSeparator();
+            item(menu, "Delete All Stashes…", listener::stashClear).setEnabled(stashes.getChildCount() > 0);
         } else if (node == remotes) {
             item(menu, "New Remote…", listener::newRemote);
         } else if (o instanceof Remote r) {

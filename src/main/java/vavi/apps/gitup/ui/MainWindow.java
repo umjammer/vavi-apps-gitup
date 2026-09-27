@@ -69,6 +69,7 @@ public class MainWindow extends JFrame {
         plus.addActionListener(e -> app.showBrowser());
         tabs.putClientProperty("JTabbedPane.trailingComponent", plus);
         tabs.addChangeListener(e -> selectionChanged());
+        installTabDrag();
         setContentPane(tabs);
         setJMenuBar(buildMenuBar());
         WindowState.remember(this, "main", new Dimension(1400, 900));
@@ -117,6 +118,49 @@ public class MainWindow extends JFrame {
         return bar;
     }
 
+    /** drag a tab onto another to swap their positions */
+    private void installTabDrag() {
+        java.awt.event.MouseAdapter drag = new java.awt.event.MouseAdapter() {
+            int from = -1;
+            @Override public void mousePressed(java.awt.event.MouseEvent e) {
+                from = javax.swing.SwingUtilities.isLeftMouseButton(e) ? tabs.indexAtLocation(e.getX(), e.getY()) : -1;
+            }
+            @Override public void mouseDragged(java.awt.event.MouseEvent e) {
+                if (from < 0) return;
+                int to = tabs.indexAtLocation(e.getX(), e.getY());
+                if (to < 0 || to == from) return;
+                moveTab(from, to);
+                from = to;
+            }
+            @Override public void mouseReleased(java.awt.event.MouseEvent e) {
+                from = -1;
+            }
+        };
+        tabs.addMouseListener(drag);
+        tabs.addMouseMotionListener(drag);
+    }
+
+    /** moves the tab keeping its title, tooltip and selection */
+    private void moveTab(int from, int to) {
+        Component c = tabs.getComponentAt(from);
+        String title = tabs.getTitleAt(from);
+        String tip = tabs.getToolTipTextAt(from);
+        javax.swing.Icon icon = tabs.getIconAt(from);
+        boolean selected = tabs.getSelectedIndex() == from;
+        movingTab = true;
+        try {
+            tabs.removeTabAt(from);
+            tabs.insertTab(title, icon, c, tip, to);
+            if (selected) tabs.setSelectedIndex(to);
+        } finally {
+            movingTab = false;
+        }
+        selectionChanged();
+    }
+
+    /** suppresses selection handling while a tab is removed and inserted again */
+    private boolean movingTab;
+
     private void selectRelative(int d) {
         int n = tabs.getTabCount();
         if (n > 0) tabs.setSelectedIndex((tabs.getSelectedIndex() + d + n) % n);
@@ -124,6 +168,7 @@ public class MainWindow extends JFrame {
 
     /** the Repository menu shows the selected tab's actions */
     private void selectionChanged() {
+        if (movingTab) return;
         repositoryMenu.removeAll();
         RepoPanel p = selected();
         if (p != null) {

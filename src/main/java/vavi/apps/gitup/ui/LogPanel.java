@@ -334,8 +334,10 @@ public class LogPanel extends JPanel {
             // GitUp's history rewriting
             item(menu, "Edit Message…", () -> { if (listener != null) listener.editMessage(c); });
             item(menu, "Edit Author…", () -> { if (listener != null) listener.editAuthor(c); });
-            rewriteItem(menu, "Squash Into Parent…", c, Rewrite.SQUASH, single);
-            rewriteItem(menu, "Fixup Into Parent", c, Rewrite.FIXUP, single);
+            // not amend: melds this commit into its parent (which may be deep in the history), the parent's message is kept
+            String parent = single ? c.parents().getFirst().substring(0, 7) : "Parent";
+            rewriteItem(menu, "Squash Into " + parent + "…", c, Rewrite.SQUASH, single);
+            rewriteItem(menu, "Fixup Into " + parent, c, Rewrite.FIXUP, single);
             rewriteItem(menu, "Move Up (Swap with Child)", c, Rewrite.MOVE_UP, single);
             rewriteItem(menu, "Move Down (Swap with Parent)", c, Rewrite.MOVE_DOWN, single);
             rewriteItem(menu, "Delete Commit…", c, Rewrite.DELETE, single);
