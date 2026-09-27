@@ -17,14 +17,17 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 
 import com.sun.jna.NativeLong;
 import com.sun.jna.Pointer;
 import com.sun.jna.ptr.IntByReference;
+import com.sun.jna.ptr.NativeLongByReference;
 import com.sun.jna.ptr.PointerByReference;
 
 import vavi.apps.gitup.jna.LibGit2;
 import vavi.apps.gitup.jna.Structs.GitDiffDelta;
+import vavi.apps.gitup.jna.Structs.GitDiffHunk;
 import vavi.apps.gitup.jna.Structs.GitDiffOptions;
 import vavi.apps.gitup.jna.Structs.GitOid;
 import vavi.apps.gitup.jna.Structs.GitStatusEntry;
@@ -301,6 +304,10 @@ public class GitRepo implements AutoCloseable {
     }
 
     private GitDiffOptions diffOptions(String path, boolean untracked) {
+        return diffOptions(path, untracked, ignoreWhitespace);
+    }
+
+    private GitDiffOptions diffOptions(String path, boolean untracked, boolean ignoreWhitespace) {
         GitDiffOptions o = new GitDiffOptions();
         git.git_diff_options_init(o, 1);
         o.context_lines = contextLines;
@@ -351,27 +358,29 @@ public class GitRepo implements AutoCloseable {
      * @return null when there is no difference any more
      */
     public LazyPatch openPatch(FileChange file) {
-        List<String> paths = file.oldPath() != null && !file.oldPath().equals(file.path())
-                ? List.of(file.oldPath(), file.path()) : List.of(file.path());
-        GitDiffOptions o = diffOptions(null, !file.staged());
-        o.pathspec.set(paths.toArray(String[]::new));
-        PointerByReference dp = new PointerByReference();
-        Pointer index = index();
-        try {
-            if (file.staged()) {
-                Pointer tree = headTree0();
-                try {
-                    check(git.git_diff_tree_to_index(dp, handle(), tree, index, o), "diff");
-                } finally {
-                    if (tree != null) git.git_tree_free(tree);
+        String[] paths = file.oldPath() != null && !file.oldPath().equals(file.path())
+                ? new String[] {file.oldPath(), file.path()} : new String[] {file.path()};
+        return openPatch(file, ws -> {
+            GitDiffOptions o = diffOptions(null, !file.staged(), ws);
+            o.pathspec.set(paths);
+            PointerByReference dp = new PointerByReference();
+            Pointer index = index();
+            try {
+                if (file.staged()) {
+                    Pointer tree = headTree0();
+                    try {
+                        check(git.git_diff_tree_to_index(dp, handle(), tree, index, o), "diff");
+                    } finally {
+                        if (tree != null) git.git_tree_free(tree);
+                    }
+                } else {
+                    check(git.git_diff_index_to_workdir(dp, handle(), index, o), "diff");
                 }
-            } else {
-                check(git.git_diff_index_to_workdir(dp, handle(), index, o), "diff");
+            } finally {
+                git.git_index_free(index);
             }
-        } finally {
-            git.git_index_free(index);
-        }
-        return toPatch(dp.getValue(), file);
+            return dp.getValue();
+        });
     }
 
     /** opens a patch of one file in a commit (against its first parent) */
@@ -381,25 +390,76 @@ public class GitRepo implements AutoCloseable {
 
     /** opens a patch of one file changed from the first parent of oldest to newest */
     public LazyPatch openPatch(String oldestOid, String newestOid, FileChange file) {
-        Pointer[] trees = rangeTrees(oldestOid, newestOid);
-        try {
-            GitDiffOptions o = diffOptions(null, false);
-            o.pathspec.set(file.oldPath() != null && !file.oldPath().equals(file.path())
-                    ? new String[] {file.oldPath(), file.path()} : new String[] {file.path()});
-            PointerByReference dp = new PointerByReference();
-            check(git.git_diff_tree_to_tree(dp, handle(), trees[0], trees[1], o), "diff");
-            return toPatch(dp.getValue(), file);
-        } finally {
-            freeTrees(trees);
-        }
+        String[] paths = file.oldPath() != null && !file.oldPath().equals(file.path())
+                ? new String[] {file.oldPath(), file.path()} : new String[] {file.path()};
+        return openPatch(file, ws -> {
+            Pointer[] trees = rangeTrees(oldestOid, newestOid);
+            try {
+                GitDiffOptions o = diffOptions(null, false, ws);
+                o.pathspec.set(paths);
+                PointerByReference dp = new PointerByReference();
+                check(git.git_diff_tree_to_tree(dp, handle(), trees[0], trees[1], o), "diff");
+                return dp.getValue();
+            } finally {
+                freeTrees(trees);
+            }
+        });
     }
 
-    private LazyPatch toPatch(Pointer diff, FileChange file) {
+    /**
+     * @param differ makes the diff of the file, ignoring whitespace or not
+     * @return null when there is no difference
+     */
+    private LazyPatch openPatch(FileChange file, Function<Boolean, Pointer> differ) {
+        Pointer diff = differ.apply(ignoreWhitespace);
         if (git.git_diff_num_deltas(diff).longValue() == 0) {
             git.git_diff_free(diff);
             return null;
         }
-        return new LazyPatch(diff, 0, file, ignoreWhitespace);
+        boolean ignored = false;
+        if (ignoreWhitespace) {
+            // the actions stay usable when no whitespace change was left out: the patch applies as is
+            Pointer full = differ.apply(false);
+            try {
+                ignored = !sameHunks(diff, full);
+            } finally {
+                git.git_diff_free(full);
+            }
+        }
+        return new LazyPatch(diff, 0, file, ignored);
+    }
+
+    /** @return true when the first deltas of both diffs have the same hunks (ranges and line counts) */
+    private boolean sameHunks(Pointer a, Pointer b) {
+        if (git.git_diff_num_deltas(b).longValue() == 0) return false;
+        PointerByReference pa = new PointerByReference();
+        PointerByReference pb = new PointerByReference();
+        check(git.git_patch_from_diff(pa, a, new NativeLong(0)), "patch");
+        try {
+            check(git.git_patch_from_diff(pb, b, new NativeLong(0)), "patch");
+            try {
+                if (pa.getValue() == null || pb.getValue() == null) return pa.getValue() == pb.getValue();
+                int n = git.git_patch_num_hunks(pa.getValue()).intValue();
+                if (n != git.git_patch_num_hunks(pb.getValue()).intValue()) return false;
+                PointerByReference hp = new PointerByReference();
+                NativeLongByReference la = new NativeLongByReference();
+                NativeLongByReference lb = new NativeLongByReference();
+                for (int i = 0; i < n; i++) {
+                    check(git.git_patch_get_hunk(hp, la, pa.getValue(), new NativeLong(i)), "hunk");
+                    GitDiffHunk ha = new GitDiffHunk(hp.getValue());
+                    check(git.git_patch_get_hunk(hp, lb, pb.getValue(), new NativeLong(i)), "hunk");
+                    GitDiffHunk hb = new GitDiffHunk(hp.getValue());
+                    if (ha.old_start != hb.old_start || ha.old_lines != hb.old_lines
+                            || ha.new_start != hb.new_start || ha.new_lines != hb.new_lines
+                            || la.getValue().longValue() != lb.getValue().longValue()) return false;
+                }
+                return true;
+            } finally {
+                if (pb.getValue() != null) git.git_patch_free(pb.getValue());
+            }
+        } finally {
+            if (pa.getValue() != null) git.git_patch_free(pa.getValue());
+        }
     }
 
     /** @return [first parent tree of oldest (nullable), tree of newest] */
@@ -1565,6 +1625,15 @@ public class GitRepo implements AutoCloseable {
     public void stashDrop(int index) {
         cmd("git stash drop stash@{" + index + "}");
         check(git.git_stash_drop(handle(), new NativeLong(index)), "stash drop");
+    }
+
+    /** drops every stash */
+    public void stashClear() {
+        cmd("git stash clear");
+        // dropping stash@{0} shifts the rest down
+        for (int i = stashes().size(); i > 0; i--) {
+            check(git.git_stash_drop(handle(), new NativeLong(0)), "stash drop");
+        }
     }
 
     // ignore / tracking

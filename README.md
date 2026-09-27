@@ -49,6 +49,7 @@ $ mvn exec:exec -Drepo=/path/to/repository
 ## TODO
 
  - app icon
+ - DnD merge, cherry-pick
 
 ---
 

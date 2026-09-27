@@ -127,9 +127,11 @@ public class RepoPanel extends JPanel {
     private List<GitRepo.Remote> remotes = List.of();
     /** the oldest commit of a multiple selection shown in the lower panes, equals selectedCommit for one */
     private String rangeOldest;
-    /** the working copy file whose diff is shown */
+    /** the working copy file whose diff is shown, kept while a commit is shown to come back to it */
     private FileChange currentFile;
     private boolean adjusting;
+    /** selects the first staged file on the next status update, after staging */
+    private boolean selectFirstStaged;
     private boolean merging;
     /** the repository state last shown */
     private GitRepo.State repoState = GitRepo.State.NONE;
@@ -199,7 +201,7 @@ public class RepoPanel extends JPanel {
         boolean ws = vavi.apps.gitup.model.Settings.get().ignoreWhitespace();
         if (repo == null && workdir == null) return;
         exec.run(() -> { repo.setContextLines(n); repo.setIgnoreWhitespace(ws); }, () -> {
-            if (showingWorking) reopenCurrentFile();
+            if (showingWorking) reopenCurrentFile(true);
             else {
                 List<FileChange> sel = staging.commitTable.selectedFiles();
                 if (sel.size() == 1 && selectedCommit != null) showCommitFile(rangeOldest, selectedCommit, sel.getFirst());
@@ -286,6 +288,8 @@ public class RepoPanel extends JPanel {
             @Override public void stashApply(Stash stash, boolean drop) { RepoPanel.this.stashApply(stash, drop); }
             @Override public void stashDrop(Stash stash) { RepoPanel.this.stashDrop(stash); }
             @Override public void showStash(Stash stash) { RepoPanel.this.showStash(stash); }
+            @Override public void stash() { RepoPanel.this.stash(); }
+            @Override public void stashClear() { RepoPanel.this.stashClear(); }
             @Override public void newBranch() { RepoPanel.this.newBranch(null); }
             @Override public void renameBranch(Ref branch) { RepoPanel.this.renameBranch(branch); }
             @Override public void deleteBranch(Ref branch) { RepoPanel.this.deleteBranches(branch); }
@@ -296,6 +300,7 @@ public class RepoPanel extends JPanel {
         });
         FileTable.Listener files = new FileTable.Listener() {
             @Override public void move(FileTable source, List<FileChange> list) {
+                if (!source.isStaged()) selectFirstStaged = true;
                 exec.run(() -> {
                     if (source.isStaged()) repo.unstage(list);
                     else repo.stage(list);
@@ -348,6 +353,7 @@ public class RepoPanel extends JPanel {
         staging.commitButton.addActionListener(e -> commit());
         staging.stageAllButton.addActionListener(e -> {
             List<FileChange> all = staging.unstagedTable.getFiles();
+            selectFirstStaged = true;
             exec.run(() -> repo.stage(all), this::refreshStatus);
         });
         staging.unstageAllButton.addActionListener(e -> {
@@ -620,7 +626,7 @@ public class RepoPanel extends JPanel {
                 return;
             }
             applyStatus(s.getKey(), s.getValue());
-            if (showingWorking) reopenCurrentFile();
+            if (showingWorking) reopenCurrentFile(true);
         });
     }
 
@@ -650,6 +656,15 @@ public class RepoPanel extends JPanel {
         } finally {
             adjusting = false;
         }
+        if (selectFirstStaged) {
+            selectFirstStaged = false;
+            if (showingWorking && staging.stagedTable.getRowCount() > 0) {
+                staging.stagedTable.clearSelection(); // a kept selection would not fire
+                staging.stagedTable.setRowSelectionInterval(0, 0);
+                staging.stagedTable.scrollRectToVisible(staging.stagedTable.getCellRect(0, 0, true));
+            }
+            staging.stagedTable.requestFocusInWindow();
+        }
         Path wd = workdir;
         exec.submit(() -> latestModified(wd, s), logPanel::setUncommittedTime);
         if (state != repoState) {
@@ -677,7 +692,7 @@ public class RepoPanel extends JPanel {
             showingWorking = true;
             selectedCommit = null;
             staging.showWorking();
-            reopenCurrentFile();
+            reopenCurrentFile(false);
             return;
         }
         showingWorking = false;
@@ -689,6 +704,7 @@ public class RepoPanel extends JPanel {
         exec.submit(() -> repo.commitFiles(oid), files -> {
             if (!oid.equals(selectedCommit)) return;
             adjusting = true;
+            staging.commitTable.clearSelection(); // a kept selection would not fire for the new commit
             staging.commitTable.setFiles(files);
             adjusting = false;
             int row = 0;
@@ -727,6 +743,7 @@ public class RepoPanel extends JPanel {
         exec.submit(() -> repo.rangeFiles(oldest, newest), files -> {
             if (!newest.equals(selectedCommit) || !oldest.equals(rangeOldest)) return;
             adjusting = true;
+            staging.commitTable.clearSelection(); // a kept selection would not fire for the new commit
             staging.commitTable.setFiles(files);
             adjusting = false;
             if (!files.isEmpty()) staging.commitTable.setRowSelectionInterval(0, 0);
@@ -748,7 +765,7 @@ public class RepoPanel extends JPanel {
     private void showFile(FileChange f, boolean keepPosition) {
         currentFile = f;
         exec.submit(() -> repo.openPatch(f), p -> {
-            if (currentFile != f) {
+            if (currentFile != f || !showingWorking) {
                 if (p != null) exec.run(p::close, null);
                 return;
             }
@@ -763,7 +780,6 @@ public class RepoPanel extends JPanel {
 
     /** shows a file changed from the parent of oldest to newest (the same commit for one) */
     private void showCommitFile(String oldest, String oid, FileChange f) {
-        currentFile = null;
         exec.submit(() -> repo.openPatch(oldest, oid, f), p -> {
             if (!oid.equals(selectedCommit) || !oldest.equals(rangeOldest)) {
                 if (p != null) exec.run(p::close, null);
@@ -784,25 +800,32 @@ public class RepoPanel extends JPanel {
         if (old != null) exec.run(old::close, null);
     }
 
-    /** after a change: re-select the current file on the same side, or clear the diff */
-    private void reopenCurrentFile() {
+    /**
+     * after a change or back from a commit: re-select the current file on the same side,
+     * or clear the diff and the selection (a still selected row would not fire when clicked)
+     *
+     * @param keepPosition keep the scroll position (the same file is shown)
+     */
+    private void reopenCurrentFile(boolean keepPosition) {
         FileChange f = currentFile;
-        if (f == null) {
-            setDiff(null, DiffView.Mode.UNSTAGED, "Select a file");
-            return;
-        }
-        FileTable table = f.staged() ? staging.stagedTable : staging.unstagedTable;
-        FileChange now = table.getFiles().stream().filter(x -> x.path().equals(f.path())).findFirst().orElse(null);
-        if (now == null) {
-            currentFile = null;
-            setDiff(null, DiffView.Mode.UNSTAGED, "Select a file");
-            return;
-        }
+        FileTable table = f == null ? null : f.staged() ? staging.stagedTable : staging.unstagedTable;
+        FileChange now = f == null ? null : table.getFiles().stream().filter(x -> x.path().equals(f.path())).findFirst().orElse(null);
         adjusting = true;
-        int i = table.getFiles().indexOf(now);
-        table.setRowSelectionInterval(i, i);
-        adjusting = false;
-        showFile(now, true);
+        try {
+            if (now == null) {
+                currentFile = null;
+                staging.stagedTable.clearSelection();
+                staging.unstagedTable.clearSelection();
+                setDiff(null, DiffView.Mode.UNSTAGED, "Select a file");
+                return;
+            }
+            (table == staging.stagedTable ? staging.unstagedTable : staging.stagedTable).clearSelection();
+            int i = table.getFiles().indexOf(now);
+            table.setRowSelectionInterval(i, i);
+        } finally {
+            adjusting = false;
+        }
+        showFile(now, keepPosition);
     }
 
     // working copy actions
@@ -1198,6 +1221,11 @@ public class RepoPanel extends JPanel {
     private final vavi.apps.gitup.model.CommandLog commandLog = new vavi.apps.gitup.model.CommandLog();
     private CommandHistory commandHistory;
 
+    /** the equivalent git commands of what was done in this tab, also by others (e.g. a subtree move) */
+    public vavi.apps.gitup.model.CommandLog commandLog() {
+        return commandLog;
+    }
+
     private void showCommandHistory() {
         if (commandHistory == null || !commandHistory.isDisplayable()) {
             commandHistory = new CommandHistory(this, getRepositoryName(), commandLog);
@@ -1508,7 +1536,7 @@ public class RepoPanel extends JPanel {
                     JPanel p = new JPanel(new BorderLayout(0, 6));
                     p.add(new JLabel("Squashed commit message:"), BorderLayout.NORTH);
                     p.add(new JScrollPane(text), BorderLayout.CENTER);
-                    if (JOptionPane.showConfirmDialog(this, p, "Squash Into Parent", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) return;
+                    if (JOptionPane.showConfirmDialog(this, p, "Squash Into " + parent.shortOid(), JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) return;
                     message = text.getText().strip();
                     if (message.isEmpty()) return;
                 }
@@ -1921,6 +1949,11 @@ public class RepoPanel extends JPanel {
     private void stashDrop(Stash stash) {
         if (!confirm("Delete the stash \"" + stash.message() + "\"?\nThis cannot be undone.", "Delete Stash")) return;
         exec.run(() -> repo.stashDrop(stash.index()), () -> refreshAll(false));
+    }
+
+    private void stashClear() {
+        if (!confirm("Delete all stashes?\nThis cannot be undone.", "Delete All Stashes")) return;
+        exec.run(repo::stashClear, () -> refreshAll(false));
     }
 
     // remote

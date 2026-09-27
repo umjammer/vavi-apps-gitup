@@ -149,6 +149,7 @@ public class Main implements MainWindow.App {
     public void showBrowser() {
         if (browser == null) {
             browser = new RepositoryBrowser(bookmarks, bookmarksFile, this::open);
+            browser.setCommandLogs(this::commandLog);
             browser.addWindowListener(new WindowAdapter() {
                 @Override public void windowClosing(WindowEvent e) {
                     WindowState.setFlag(BROWSER_VISIBLE, false);
@@ -169,6 +170,24 @@ public class Main implements MainWindow.App {
             prefs.flush(); // a quit (⌘Q) exits without closing the window
         } catch (java.util.prefs.BackingStoreException e) {
             System.getLogger(Main.class.getName()).log(System.Logger.Level.WARNING, e.getMessage(), e);
+        }
+    }
+
+    /** the command history of the tab of the repository, null when not open */
+    private vavi.apps.gitup.model.CommandLog commandLog(Path repo) {
+        if (window == null || !window.isDisplayable()) return null;
+        for (vavi.apps.gitup.ui.RepoPanel p : window.panels()) {
+            if (sameFile(repo, p.getWorkdir()) || sameFile(repo, p.getPath())) return p.commandLog();
+        }
+        return null;
+    }
+
+    private static boolean sameFile(Path a, Path b) {
+        if (b == null) return false;
+        try {
+            return Files.isSameFile(a, b);
+        } catch (java.io.IOException e) {
+            return false;
         }
     }
 
