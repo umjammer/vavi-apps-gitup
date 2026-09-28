@@ -70,7 +70,8 @@ import static java.lang.System.getLogger;
  *  sidebar | log (graph, description, date, author, commit)
  *          |-----------------------------------------------
  *          | staged / unstaged files | hunk diff
- *          | commit message          |
+ *  --------| commit message          |
+ *  hooks   |
  * </pre>
  * every git call goes through {@link GitExecutor}, the UI state lives on the EDT.
  * the working directory is watched with FSEvents and refreshed on change.
@@ -99,6 +100,7 @@ public class RepoPanel extends JPanel {
     private final Path path;
 
     private final SidebarPanel sidebar = new SidebarPanel();
+    private final HooksPanel hooksPanel = new HooksPanel();
     private final LogPanel logPanel = new LogPanel();
     private final StagingPanel staging = new StagingPanel();
     private final DiffView diff = new DiffView();
@@ -164,6 +166,7 @@ public class RepoPanel extends JPanel {
             spellCheck = SpellCheck.attach(staging.message, () -> vavi.apps.gitup.model.Settings.get().spellCheck());
             scheduleAutoFetch();
             startWatcher(r.gitDir());
+            hooksPanel.setHooks(new vavi.apps.gitup.model.GitHooks(workdir != null ? workdir : r.gitDir(), r.gitDir()));
             refreshAll(true);
         }, e -> {
             showError(e);
@@ -254,9 +257,13 @@ public class RepoPanel extends JPanel {
         JSplitPane center = new JSplitPane(JSplitPane.VERTICAL_SPLIT, logArea, bottom);
         center.setResizeWeight(0.4);
         center.setDividerLocation(330);
-        JSplitPane main = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, sidebar, center);
+        JSplitPane side = new JSplitPane(JSplitPane.VERTICAL_SPLIT, sidebar, hooksPanel);
+        side.setResizeWeight(0.8);
+        side.setDividerLocation(560);
+        JSplitPane main = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, side, center);
         main.setDividerLocation(200);
         WindowState.remember(main, "split.sidebar");
+        WindowState.remember(side, "split.hooks");
         WindowState.remember(center, "split.log");
         WindowState.remember(bottom, "split.staging");
         WindowState.remember(logPanel.getTable(), "log");
@@ -620,6 +627,7 @@ public class RepoPanel extends JPanel {
     /** reloads the working copy status and the shown diff */
     public void refreshStatus() {
         if (workdir == null) return;
+        hooksPanel.refresh();
         exec.submit(() -> Map.entry(repo.status(), repo.state()), s -> {
             boolean dirty = !s.getKey().staged().isEmpty() || !s.getKey().unstaged().isEmpty();
             if (dirty != logPanel.hasUncommitted()) {
