@@ -8,10 +8,15 @@ package vavi.apps.gitup.model;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Stream;
 
 
 /**
@@ -55,11 +60,64 @@ public record ExternalTool(String id, String name, String executable, String dif
         return PRESETS.stream().filter(t -> t.id().equals(id)).findFirst().orElse(PRESETS.getFirst());
     }
 
-    /** @return true when the executable is on the PATH (or in the usual Homebrew / local bins) */
+    /** the usual Homebrew / local bins, GUI launched apps have a minimal PATH */
+    private static final String EXTRA_PATH = "/usr/local/bin:/opt/homebrew/bin";
+
+    /** where application bundles are looked up, including one level of sub folders (e.g. {@code /Applications/Local}) */
+    private static final List<Path> APP_DIRS = List.of(Path.of("/Applications"), Path.of(System.getProperty("user.home"), "Applications"));
+
+    /** where executables live inside an application bundle */
+    private static final List<String> BUNDLE_BINS = List.of("Contents/MacOS", "Contents/Resources/app/bin", "Contents/SharedSupport/bin");
+
+    private static volatile List<Path> bundleBinDirs;
+
+    /** @return the bin dirs in application bundles which have a preset's executable, lazily scanned once */
+    static List<Path> bundleBinDirs() {
+        if (bundleBinDirs == null) {
+            List<Path> bundles = new ArrayList<>();
+            for (Path dir : APP_DIRS) {
+                for (Path p : list(dir)) {
+                    if (p.getFileName().toString().endsWith(".app")) bundles.add(p);
+                    else for (Path q : list(p)) if (q.getFileName().toString().endsWith(".app")) bundles.add(q);
+                }
+            }
+            Set<Path> dirs = new LinkedHashSet<>();
+            for (ExternalTool t : PRESETS) {
+                if (t.executable == null) continue;
+                for (Path bundle : bundles) {
+                    for (String bin : BUNDLE_BINS) {
+                        Path d = bundle.resolve(bin);
+                        if (Files.isExecutable(d.resolve(t.executable))) dirs.add(d);
+                    }
+                }
+            }
+            bundleBinDirs = List.copyOf(dirs);
+        }
+        return bundleBinDirs;
+    }
+
+    /** @return the sub directories, empty when not readable */
+    private static List<Path> list(Path dir) {
+        if (!Files.isDirectory(dir)) return List.of();
+        try (Stream<Path> s = Files.list(dir)) {
+            return s.filter(Files::isDirectory).toList();
+        } catch (IOException | UncheckedIOException e) {
+            return List.of();
+        }
+    }
+
+    /** @return PATH plus the usual Homebrew / local bins and the bin dirs of installed application bundles */
+    static String searchPath(String path) {
+        StringBuilder sb = new StringBuilder(path == null ? "" : path);
+        sb.append(File.pathSeparator).append(EXTRA_PATH);
+        bundleBinDirs().forEach(d -> sb.append(File.pathSeparator).append(d));
+        return sb.toString();
+    }
+
+    /** @return true when the executable is on the PATH, in the usual Homebrew / local bins or in an application bundle */
     public boolean installed() {
         if (executable == null) return true;
-        String path = System.getenv().getOrDefault("PATH", "") + File.pathSeparator + "/usr/local/bin:/opt/homebrew/bin";
-        for (String dir : path.split(File.pathSeparator)) {
+        for (String dir : searchPath(System.getenv("PATH")).split(File.pathSeparator)) {
             if (!dir.isEmpty() && Files.isExecutable(Path.of(dir, executable))) return true;
         }
         return false;
@@ -79,7 +137,7 @@ public record ExternalTool(String id, String name, String executable, String dif
         ProcessBuilder pb = new ProcessBuilder("/bin/sh", "-c", command);
         pb.environment().putAll(files);
         // GUI launched apps have a minimal PATH
-        pb.environment().merge("PATH", "/usr/local/bin:/opt/homebrew/bin", (a, b) -> a + File.pathSeparator + b);
+        pb.environment().put("PATH", searchPath(pb.environment().get("PATH")));
         pb.directory(workdir.toFile());
         pb.redirectErrorStream(true);
         return pb.start();
