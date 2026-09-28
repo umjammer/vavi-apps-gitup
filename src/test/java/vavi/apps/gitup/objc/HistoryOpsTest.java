@@ -81,6 +81,24 @@ class HistoryOpsTest {
     }
 
     @Test
+    void fixupInto() throws Exception {
+        threeCommits();
+        Files.writeString(dir.resolve("four.txt"), "four\n");
+        sh("add", ".");
+        sh("commit", "-q", "-m", "four");
+        String tree = sh("rev-parse", "HEAD^{tree}");
+        String two = sh("rev-parse", "HEAD~2");
+        String fixed = HistoryOps.fixupInto(dir, sh("rev-parse", "HEAD"), two, 1, null);
+        assertEquals("three\ntwo\none", sh("log", "--format=%s"), "keeps the target's message");
+        assertEquals(fixed, sh("rev-parse", "HEAD~1"));
+        assertEquals("four.txt\ntwo.txt", sh("show", "--name-only", "--format=", "HEAD~1").lines().sorted().reduce((a, b) -> a + "\n" + b).orElse(""));
+        assertEquals(tree, sh("rev-parse", "HEAD^{tree}"), "the final tree is the same");
+
+        // a wrong distance fails at the fixup
+        assertThrows(GitException.class, () -> HistoryOps.fixupInto(dir, sh("rev-parse", "HEAD"), sh("rev-parse", "HEAD~2"), 0, null));
+    }
+
+    @Test
     void deleteAndReset() throws Exception {
         threeCommits();
         HistoryOps.delete(dir, sh("rev-parse", "HEAD~1"));

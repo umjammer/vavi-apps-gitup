@@ -69,6 +69,8 @@ public class LogPanel extends JPanel {
         void editAuthor(CommitRow commit);
         /** GitUp's other history rewrites */
         void rewrite(CommitRow commit, Rewrite rewrite);
+        /** fixup into an ancestor picked by the user */
+        void fixupInto(CommitRow commit);
         /** SourceTree's "Reset current branch to this commit" */
         void resetTo(CommitRow commit);
         void checkoutCommit(CommitRow commit);
@@ -338,6 +340,7 @@ public class LogPanel extends JPanel {
             String parent = single ? c.parents().getFirst().substring(0, 7) : "Parent";
             rewriteItem(menu, "Squash Into " + parent + "…", c, Rewrite.SQUASH, single);
             rewriteItem(menu, "Fixup Into " + parent, c, Rewrite.FIXUP, single);
+            item(menu, "Fixup Into…", () -> { if (listener != null) listener.fixupInto(c); }).setEnabled(single);
             rewriteItem(menu, "Move Up (Swap with Child)", c, Rewrite.MOVE_UP, single);
             rewriteItem(menu, "Move Down (Swap with Parent)", c, Rewrite.MOVE_DOWN, single);
             rewriteItem(menu, "Delete Commit…", c, Rewrite.DELETE, single);
