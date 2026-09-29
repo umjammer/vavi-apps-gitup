@@ -11,6 +11,14 @@ SourceTree-like git GUI (Swing) using [GitUp](https://gitup.co)'s `GitUpKit.fram
 
 requires macOS and GitUp.app (tested with 1.4.0, embedding libgit2 1.4.4).
 
+### 🏆️ Key Features
+
+- ⚡️ ultra speed diff view rendering
+- 🔍️ full text searcher
+- 🛡️ prevent your repository that already pushed from `commit --amend` etc.
+- 🚛️ moving subtree inter projects by gui
+- 🪝 git hook manager that has preset scripts
+
 ## Install
 
 ### maven
@@ -50,6 +58,12 @@ $ mvn exec:exec -Drepo=/path/to/repository
 
  - app icon
  - DnD merge, cherry-pick
+ - ~~when git push, git hook -> plugin, built-in like SNAPSHOT checker~~
+ - log pane toolbar, back gray, button bg gray, fg dark gray like `x` button of tab
+ - ~~external tool search dir recursively~~
+ - at repository browser, incremental search, when long time no see it, 1st char input causes spinning cursor. in that case delay start searching
+ - hook editor: popup menu: make selected to preset
+ - outsource hook preset, add search path by a system property
 
 ---
 
