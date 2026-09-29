@@ -51,6 +51,7 @@ public class BuiltinIconProvider implements IconProvider {
             case REMOTE_BRANCH -> glyph(size, GRAY, BuiltinIconProvider::branch);
             case REMOTES -> glyph(size, PURPLE, BuiltinIconProvider::cloud);
             case STASH, STASHES, STASH_ITEM -> glyph(size, key == Key.STASH_ITEM ? GRAY : ORANGE, g -> { g.drawRoundRect(3, 9, 18, 12, 3, 3); line(g, 3, 13, 21, 13); line(g, 6, 5, 18, 5); line(g, 8, 2, 16, 2); });
+            case HOOKS -> glyph(size, GRAY, g -> { g.drawRoundRect(2, 4, 20, 16, 4, 4); line(g, 6, 9, 9, 12); line(g, 9, 12, 6, 15); line(g, 11, 15, 17, 15); });
             case TAG, TAGS, TAG_ITEM -> glyph(size, key == Key.TAG_ITEM ? GRAY : YELLOW, BuiltinIconProvider::tag);
             case DISCARD -> glyph(size, RED, g -> { g.drawArc(4, 5, 16, 16, 90, 270); head(g, 12, 5, false); });
             case REFRESH -> glyph(size, BLUE, g -> { g.drawArc(4, 4, 16, 16, 60, 300); arrowHead(g, 20, 6); });

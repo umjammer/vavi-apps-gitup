@@ -120,6 +120,7 @@ public class SourceTreeIconProvider implements IconProvider {
             case REMOTES -> "Remotes";
             case TAGS -> "Tags";
             case STASHES -> "Stashes";
+            case HOOKS -> "Repo - Terminal";
             case LOCAL_BRANCH, REMOTE_BRANCH -> "i0039_devtools-branch.tiff";
             case TAG_ITEM -> "i0058_devtools-tag.tiff";
             case STASH_ITEM -> "stash.tiff";
@@ -163,7 +164,7 @@ public class SourceTreeIconProvider implements IconProvider {
             for (String n : new String[] {"Repo - Commit", "Repo - Pull", "Repo - Push"}) cache.computeIfAbsent(n + dark, this::load);
         }
         for (String n : new String[] {"Repo - Fetch", "Repo - Branch", "Repo - Stash", "Discard", "Repo - Refresh", "Repo - Tag",
-                "Repo - Merge", "Branches", "Remotes", "Tags", "Stashes", "Folder",
+                "Repo - Merge", "Branches", "Remotes", "Tags", "Stashes", "Repo - Terminal", "Folder",
                 "LogViewBranch", "Current Checkout", "LogViewTag", "Prefs - General", "Prefs - Accounts", "Prefs - Diff", "Prefs - Git"}) {
             cache.computeIfAbsent(n, this::load);
         }

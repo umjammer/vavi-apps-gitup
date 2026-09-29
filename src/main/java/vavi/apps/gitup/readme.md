@@ -68,7 +68,8 @@
       service / host guessed from the id, token headers of GitLab style servers too, encrypted passwords are skipped)
     * diff: colors (added / removed lines background and text like SourceTree, hunk header / selection),
       font (SourceTree's Menlo 12 by default, family / size), lines of context,
-      external diff and merge tools (FileMerge, VS Code, Kaleidoscope, Beyond Compare, Meld, P4Merge or a custom command)
+      external diff and merge tools (FileMerge, VS Code, Kaleidoscope, Beyond Compare, Meld, P4Merge or a custom command),
+      tools are also looked up in application bundles under `/Applications`, `~/Applications` and their sub folders
 * file menu: external diff, external merge tool for a conflicted file
 * command history (⇧⌘H): the git commands equivalent to what was done (libgit2 / GitUpKit calls, GitUp's rewrites as
   `git rebase -i` with a note), ⌘C copies them ready for a terminal

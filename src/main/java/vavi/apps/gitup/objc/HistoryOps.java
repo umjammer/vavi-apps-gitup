@@ -292,6 +292,26 @@ public final class HistoryOps {
                 history.fixupCommit_newCommit_error(commit, newCommit, e));
     }
 
+    /**
+     * melds the commit into an ancestor keeping the ancestor's message ({@code git commit --fixup} + autosquash):
+     * the commit is moved down (swapped with its parent) {@code between} times, then fixed up into the target.
+     * each step is a rewrite of its own, when one fails the previous ones are kept, the caller restores the references.
+     *
+     * @param between the number of commits between the target and the commit, 0 is {@link #fixupWithParent}
+     * @param resolver conflicts of the moves (nullable)
+     * @return the new commit id
+     */
+    public static String fixupInto(Path workdir, String sha1, String targetSha1, int between, ConflictResolver resolver) {
+        String moved = sha1;
+        for (int i = 0; i < between; i++) moved = swapWithParent(workdir, moved, resolver);
+        return rewrite(workdir, moved, "fixup", null, (repo, history, commit, handler, newCommit, created, e) -> {
+            NSArray parents = Rococoa.cast(commit, GCHistoryCommit.class).parents();
+            if (parents == null || parents.count() != 1 || !targetSha1.equals(sha1(parents.objectAtIndex(0))))
+                throw new GitException("the commit did not reach " + targetSha1.substring(0, 7));
+            return history.fixupCommit_newCommit_error(commit, newCommit, e);
+        });
+    }
+
     /** removes the commit, descendants are replayed on its parent. fails on a conflict */
     public static void delete(Path workdir, String sha1) {
         delete(workdir, sha1, null);

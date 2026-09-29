@@ -29,7 +29,7 @@ public interface IconProvider {
         // toolbar
         COMMIT, PULL, PUSH, FETCH, BRANCH, STASH, DISCARD, REFRESH, TAG, MERGE,
         // sidebar
-        BRANCHES, REMOTES, TAGS, STASHES, LOCAL_BRANCH, REMOTE_BRANCH, TAG_ITEM, STASH_ITEM,
+        BRANCHES, REMOTES, TAGS, STASHES, HOOKS, LOCAL_BRANCH, REMOTE_BRANCH, TAG_ITEM, STASH_ITEM,
         // repository browser
         FOLDER, REPOSITORY,
         // ref labels in the log

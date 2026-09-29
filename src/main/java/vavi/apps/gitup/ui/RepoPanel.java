@@ -70,7 +70,8 @@ import static java.lang.System.getLogger;
  *  sidebar | log (graph, description, date, author, commit)
  *          |-----------------------------------------------
  *          | staged / unstaged files | hunk diff
- *          | commit message          |
+ *  --------| commit message          |
+ *  hooks   |
  * </pre>
  * every git call goes through {@link GitExecutor}, the UI state lives on the EDT.
  * the working directory is watched with FSEvents and refreshed on change.
@@ -99,6 +100,7 @@ public class RepoPanel extends JPanel {
     private final Path path;
 
     private final SidebarPanel sidebar = new SidebarPanel();
+    private final HooksPanel hooksPanel = new HooksPanel();
     private final LogPanel logPanel = new LogPanel();
     private final StagingPanel staging = new StagingPanel();
     private final DiffView diff = new DiffView();
@@ -164,6 +166,7 @@ public class RepoPanel extends JPanel {
             spellCheck = SpellCheck.attach(staging.message, () -> vavi.apps.gitup.model.Settings.get().spellCheck());
             scheduleAutoFetch();
             startWatcher(r.gitDir());
+            hooksPanel.setHooks(new vavi.apps.gitup.model.GitHooks(workdir != null ? workdir : r.gitDir(), r.gitDir()));
             refreshAll(true);
         }, e -> {
             showError(e);
@@ -254,9 +257,13 @@ public class RepoPanel extends JPanel {
         JSplitPane center = new JSplitPane(JSplitPane.VERTICAL_SPLIT, logArea, bottom);
         center.setResizeWeight(0.4);
         center.setDividerLocation(330);
-        JSplitPane main = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, sidebar, center);
+        JSplitPane side = new JSplitPane(JSplitPane.VERTICAL_SPLIT, sidebar, hooksPanel);
+        side.setResizeWeight(0.8);
+        side.setDividerLocation(560);
+        JSplitPane main = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, side, center);
         main.setDividerLocation(200);
         WindowState.remember(main, "split.sidebar");
+        WindowState.remember(side, "split.hooks");
         WindowState.remember(center, "split.log");
         WindowState.remember(bottom, "split.staging");
         WindowState.remember(logPanel.getTable(), "log");
@@ -275,6 +282,7 @@ public class RepoPanel extends JPanel {
             @Override public void editAuthor(CommitRow commit) { RepoPanel.this.editAuthor(commit); }
             @Override public void optionsChanged(CommitLog.Options options) { RepoPanel.this.logOptionsChanged(options); }
             @Override public void rewrite(CommitRow commit, LogPanel.Rewrite rewrite) { RepoPanel.this.rewrite(commit, rewrite); }
+            @Override public void fixupInto(CommitRow commit) { RepoPanel.this.fixupInto(commit); }
             @Override public void resetTo(CommitRow commit) { RepoPanel.this.resetTo(commit); }
             @Override public void checkoutCommit(CommitRow commit) { RepoPanel.this.checkoutCommit(commit); }
             @Override public void mergeCommit(CommitRow commit) { RepoPanel.this.mergeCommit(commit); }
@@ -619,6 +627,7 @@ public class RepoPanel extends JPanel {
     /** reloads the working copy status and the shown diff */
     public void refreshStatus() {
         if (workdir == null) return;
+        hooksPanel.refresh();
         exec.submit(() -> Map.entry(repo.status(), repo.state()), s -> {
             boolean dirty = !s.getKey().staged().isEmpty() || !s.getKey().unstaged().isEmpty();
             if (dirty != logPanel.hasUncommitted()) {
@@ -1590,6 +1599,93 @@ public class RepoPanel extends JPanel {
                     showingWorking = false;
                 });
                 refreshAll(true);
+            });
+        });
+    }
+
+    /** how far back "Fixup Into…" offers ancestors */
+    private static final int FIXUP_TARGETS = 100;
+
+    /**
+     * {@code git commit --fixup} + autosquash: melds the commit into an ancestor picked by the user, keeping
+     * the ancestor's message. the commit is moved down until it is on the target (conflicts are resolved like
+     * "Move Down"), when a step fails or is aborted everything is put back.
+     */
+    private void fixupInto(CommitRow c) {
+        exec.submit(() -> {
+            Status st = repo.status();
+            boolean clean = st.staged().isEmpty() && st.unstaged().stream().allMatch(f -> f.kind() == FileChange.Kind.UNTRACKED);
+            // first parents up to a merge commit (excluded, commits between must be single parent to be moved) or the root
+            List<CommitRow> targets = new ArrayList<>();
+            List<String> parents = c.parents();
+            while (parents.size() == 1 && targets.size() < FIXUP_TARGETS) {
+                CommitRow p = repo.commitRow(parents.getFirst());
+                if (p.parents().size() > 1) break;
+                targets.add(p);
+                parents = p.parents();
+            }
+            return new Object[] {repo.state(), clean, targets};
+        }, info -> {
+            if (info[0] != GitRepo.State.NONE) {
+                showError(new IllegalStateException("finish or abort the merge / rebase in progress first"));
+                return;
+            }
+            if (!(Boolean) info[1]) {
+                showError(new IllegalStateException("commit or stash the local changes before rewriting history"));
+                return;
+            }
+            @SuppressWarnings("unchecked")
+            List<CommitRow> targets = (List<CommitRow>) info[2];
+            if (targets.isEmpty()) return;
+            javax.swing.JList<CommitRow> list = new javax.swing.JList<>(targets.toArray(CommitRow[]::new));
+            list.setSelectionMode(javax.swing.ListSelectionModel.SINGLE_SELECTION);
+            list.setSelectedIndex(0);
+            list.setVisibleRowCount(15);
+            list.setCellRenderer(new javax.swing.DefaultListCellRenderer() {
+                @Override public java.awt.Component getListCellRendererComponent(javax.swing.JList<?> l, Object v, int i, boolean s, boolean f) {
+                    CommitRow t = (CommitRow) v;
+                    return super.getListCellRendererComponent(l, t.shortOid() + "  " + t.summary(), i, s, f);
+                }
+            });
+            JLabel note = new JLabel(" ");
+            list.addListSelectionListener(e -> {
+                int n = list.getSelectedIndex();
+                note.setText(n <= 0 ? "Melded into the parent." : c.shortOid() + " is moved below " + n + " commit" + (n > 1 ? "s" : "") + " first, conflicts may occur.");
+            });
+            note.setText("Melded into the parent.");
+            JPanel p = new JPanel(new BorderLayout(0, 6));
+            p.add(new JLabel("Fixup " + c.shortOid() + " \"" + c.summary() + "\" into (its message is kept):"), BorderLayout.NORTH);
+            p.add(new JScrollPane(list), BorderLayout.CENTER);
+            p.add(note, BorderLayout.SOUTH);
+            if (JOptionPane.showConfirmDialog(this, p, "Fixup Into", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) return;
+            int between = list.getSelectedIndex();
+            if (between < 0) return;
+            CommitRow target = targets.get(between);
+            exec.submit(() -> repo.publishedIn(target.oid()), pushed -> {
+                if (!PushedGuard.allow(this, "Fixup", "The commit " + target.shortOid(), pushed)) return;
+                exec.submit(() -> {
+                    String before = repo.headTree();
+                    GitRepo.RefSnapshot snapshot = repo.snapshotRefs("Fixup", false);
+                    commandLog.add("git commit --fixup=" + target.shortOid() + "; git rebase -i --autosquash " + target.shortOid() + "^  # fixup "
+                            + c.shortOid() + " into " + target.shortOid(), "GitUpKit GCHistory rewrite");
+                    String result;
+                    try {
+                        result = HistoryOps.fixupInto(workdir, c.oid(), target.oid(), between, this::resolveRewriteConflicts);
+                    } catch (RuntimeException e) {
+                        // the moves done before the failure
+                        repo.restore(new GitRepo.RefSnapshot(snapshot.label(), snapshot.head(), snapshot.branches(), GitRepo.Restore.REFS));
+                        if (!java.util.Objects.equals(before, repo.headTree())) repo.resetHardToHead();
+                        throw e;
+                    }
+                    pushUndo(snapshot);
+                    if (!java.util.Objects.equals(before, repo.headTree())) repo.resetHardToHead();
+                    return result;
+                }, result -> {
+                    statusBar.setText("Fixed up " + c.shortOid() + " into " + target.shortOid() + " → " + result.substring(0, 7));
+                    selectedCommit = result;
+                    showingWorking = false;
+                    refreshAll(true);
+                });
             });
         });
     }
