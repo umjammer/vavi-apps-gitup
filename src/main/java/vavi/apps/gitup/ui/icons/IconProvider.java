@@ -6,6 +6,12 @@
 
 package vavi.apps.gitup.ui.icons;
 
+import java.awt.Color;
+import java.awt.Component;
+import java.awt.Graphics;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
+import java.awt.image.BufferedImage;
 import javax.swing.Icon;
 
 import static java.lang.System.getLogger;
@@ -75,24 +81,24 @@ public interface IconProvider {
     }
 
     /** SourceTree's light blue of the repository browser icons */
-    java.awt.Color LIGHT_BLUE = new java.awt.Color(0x4fa3e8);
+    Color LIGHT_BLUE = new Color(0x4fa3e8);
 
     /** the icon painted in one color (keeping its alpha: shapes and cut-outs), null for null */
-    static Icon tinted(Icon icon, java.awt.Color color) {
+    static Icon tinted(Icon icon, Color color) {
         return icon == null ? null : new TintedIcon(icon, color);
     }
 
     /** an icon recolored at the device resolution */
-    record TintedIcon(Icon icon, java.awt.Color color) implements Icon {
-        @Override public void paintIcon(java.awt.Component c, java.awt.Graphics g0, int x, int y) {
-            java.awt.Graphics2D g = (java.awt.Graphics2D) g0;
+    record TintedIcon(Icon icon, Color color) implements Icon {
+        @Override public void paintIcon(Component c, Graphics g0, int x, int y) {
+            Graphics2D g = (Graphics2D) g0;
             double scale = Math.max(1, g.getTransform().getScaleX());
             int w = (int) Math.ceil(icon.getIconWidth() * scale), h = (int) Math.ceil(icon.getIconHeight() * scale);
             if (w <= 0 || h <= 0) return;
-            java.awt.image.BufferedImage image = new java.awt.image.BufferedImage(w, h, java.awt.image.BufferedImage.TYPE_INT_ARGB);
-            java.awt.Graphics2D ig = image.createGraphics();
+            BufferedImage image = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+            Graphics2D ig = image.createGraphics();
             try {
-                ig.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION, java.awt.RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+                ig.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
                 ig.scale(scale, scale);
                 icon.paintIcon(c, ig, 0, 0);
             } finally {
@@ -109,7 +115,7 @@ public interface IconProvider {
          * keeps the alpha and the shading: the darkest pixels become the color, lighter ones
          * a paler tint of it (an outline stays stronger than a light fill)
          */
-        static void colorize(java.awt.image.BufferedImage image, java.awt.Color color) {
+        static void colorize(BufferedImage image, Color color) {
             int w = image.getWidth(), h = image.getHeight();
             int[] px = image.getRGB(0, 0, w, h, null, 0, w);
             double min = 1;

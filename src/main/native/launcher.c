@@ -157,6 +157,8 @@ int main(int argc, char *argv[]) {
         "--enable-native-access=ALL-UNNAMED",
         "--sun-misc-unsafe-memory-access=allow",
         "-Dapple.laf.useScreenMenuBar=true",
+        "-Dapple.awt.application.name=GitUp Swing",
+        "-Dswing.defaultlaf=com.formdev.flatlaf.FlatLightLaf",
         "-Djava.util.logging.config.file=./logging.properties",
         MAIN_CLASS
     };

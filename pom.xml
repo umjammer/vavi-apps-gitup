@@ -82,6 +82,8 @@
                     <vmArg>--enable-native-access=ALL-UNNAMED</vmArg>
                     <vmArg>--sun-misc-unsafe-memory-access=allow</vmArg>
                     <vmArg>-Dapple.laf.useScreenMenuBar=true</vmArg>
+                    <vmArg>-Dapple.awt.application.name=GitUp Swing</vmArg>
+                    <vmArg>-Dswing.defaultlaf=com.formdev.flatlaf.FlatLightLaf</vmArg>
                     <vmArg>-Djava.util.logging.config.file=./logging.properties</vmArg>
                   </vmArgs>
 
