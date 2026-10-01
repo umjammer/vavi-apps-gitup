@@ -43,6 +43,7 @@ import javax.swing.table.TableCellRenderer;
 
 import vavi.apps.gitup.model.CommitLog.CommitRow;
 import vavi.apps.gitup.model.GitRepo.Ref;
+import vavi.apps.gitup.model.Settings;
 
 
 /**
@@ -349,7 +350,7 @@ public class LogPanel extends JPanel {
         javax.swing.JMenu copy = new javax.swing.JMenu("Copy");
         copyItem(copy, "SHA", selected, CommitRow::oid);
         copyItem(copy, "Short SHA", selected, CommitRow::shortOid);
-        copyItem(copy, "Summary", selected, CommitRow::summary);
+        copyItem(copy, "Summary", selected, Settings.get().copySummaryAsList() ? c -> "- " + c.summary() : CommitRow::summary);
         copyItem(copy, "Message", selected, c -> c.message().strip());
         copyItem(copy, "Author", selected, c -> c.author() + " <" + c.email() + ">");
         copyItem(copy, "Row", selected, c -> String.join("\t", c.shortOid(), c.summary(), c.author() + " <" + c.email() + ">", DATE.format(c.time())));

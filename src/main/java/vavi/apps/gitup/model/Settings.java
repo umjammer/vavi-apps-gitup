@@ -195,6 +195,16 @@ public final class Settings {
         changed();
     }
 
+    /** true: the log's "Copy > Summary" prefixes each line with "- " (a markdown list, e.g. for release notes), default false */
+    public boolean copySummaryAsList() {
+        return prefs.getBoolean("history.copySummaryAsList", false);
+    }
+
+    public void setCopySummaryAsList(boolean list) {
+        prefs.putBoolean("history.copySummaryAsList", list);
+        changed();
+    }
+
     private static String blankToNull(String s) {
         return s == null || s.isBlank() ? null : s;
     }

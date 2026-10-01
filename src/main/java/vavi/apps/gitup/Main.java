@@ -6,6 +6,7 @@
 
 package vavi.apps.gitup;
 
+import java.awt.Desktop;
 import java.awt.Window;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
@@ -18,17 +19,15 @@ import java.util.prefs.Preferences;
 import javax.swing.JFileChooser;
 import javax.swing.JOptionPane;
 import javax.swing.SwingUtilities;
-import javax.swing.UIManager;
-
-import com.formdev.flatlaf.themes.FlatMacDarkLaf;
-import com.formdev.flatlaf.themes.FlatMacLightLaf;
 
 import vavi.apps.gitup.jna.GitUpKitLocator;
 import vavi.apps.gitup.jna.LibGit2;
 import vavi.apps.gitup.model.Bookmarks;
 import vavi.apps.gitup.model.MessageHistory;
+import vavi.apps.gitup.ui.LafPlugin;
 import vavi.apps.gitup.ui.MainWindow;
 import vavi.apps.gitup.ui.RepositoryBrowser;
+import vavi.apps.gitup.ui.SettingsWindow;
 import vavi.apps.gitup.ui.WindowState;
 import vavi.apps.gitup.ui.icons.IconProvider;
 
@@ -43,7 +42,6 @@ import vavi.apps.gitup.ui.icons.IconProvider;
  * system properties
  * <ul>
  * <li>{@code gitup.framework} ... GitUp.app / GitUpKit.framework location</li>
- * <li>{@code gitup.theme} ... "light" (default) or "dark"</li>
  * <li>{@code gitup.bookmarks} ... bookmarks file (default ~/Library/Application Support/vavi-apps-gitup/bookmarks.txt)</li>
  * <li>{@code gitup.messageHistory} ... number of commit messages remembered (default 50)</li>
  * </ul>
@@ -67,15 +65,8 @@ public class Main implements MainWindow.App {
     private RepositoryBrowser browser;
 
     public static void main(String[] args) throws Exception {
-        System.setProperty("apple.laf.useScreenMenuBar", "true");
-        System.setProperty("apple.awt.application.name", "GitUp Swing");
-        if ("dark".equals(System.getProperty("gitup.theme"))) {
-            FlatMacDarkLaf.setup();
-        } else {
-            FlatMacLightLaf.setup();
-        }
-        UIManager.put("Table.showHorizontalLines", false);
-        hideFocusIndicators();
+        LafPlugin lafPlugin = LafPlugin.factory(System.getProperty("swing.defaultlaf"));
+        if (lafPlugin != null) { lafPlugin.init(); }
 
         if (GitUpKitLocator.find() == null && !chooseFramework()) {
             System.exit(1);
@@ -90,8 +81,8 @@ public class Main implements MainWindow.App {
             if (!a.isBlank()) paths.add(Path.of(a).toAbsolutePath().normalize());
         }
         // the application menu's "Settings…"
-        if (java.awt.Desktop.isDesktopSupported() && java.awt.Desktop.getDesktop().isSupported(java.awt.Desktop.Action.APP_PREFERENCES)) {
-            java.awt.Desktop.getDesktop().setPreferencesHandler(e -> vavi.apps.gitup.ui.SettingsWindow.open());
+        if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.APP_PREFERENCES)) {
+            Desktop.getDesktop().setPreferencesHandler(e -> SettingsWindow.open());
         }
         SwingUtilities.invokeLater(() -> new Main().start(paths));
     }
@@ -202,22 +193,6 @@ public class Main implements MainWindow.App {
             if (w.isVisible() && (w instanceof MainWindow || w instanceof RepositoryBrowser)) return;
         }
         System.exit(0);
-    }
-
-    /**
-     * no blue focus box around lists, trees, tables (their scroll panes) and cells.
-     * the macOS themes draw a 2px focus ring and a focused border color.
-     */
-    static void hideFocusIndicators() {
-        UIManager.put("Component.focusWidth", 0);
-        UIManager.put("Component.innerFocusWidth", 0);
-        UIManager.put("Component.focusedBorderColor", UIManager.getColor("Component.borderColor"));
-        UIManager.put("Table.focusCellHighlightBorder", UIManager.getBorder("Table.cellNoFocusBorder"));
-        UIManager.put("Table.focusSelectedCellHighlightBorder", UIManager.getBorder("Table.cellNoFocusBorder"));
-        UIManager.put("List.focusCellHighlightBorder", UIManager.getBorder("List.cellNoFocusBorder"));
-        UIManager.put("List.focusSelectedCellHighlightBorder", UIManager.getBorder("List.cellNoFocusBorder"));
-        UIManager.put("Tree.showCellFocusIndicator", false);
-        UIManager.put("SplitPaneDivider.focusable", false);
     }
 
     /** asks for GitUp.app when it is not at a default location */
