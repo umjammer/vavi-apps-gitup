@@ -204,6 +204,7 @@
             <argument>--enable-native-access=ALL-UNNAMED</argument>
             <argument>--sun-misc-unsafe-memory-access=allow</argument>
             <argument>-Dapple.laf.useScreenMenuBar=true</argument>
+            <argument>-Dswing.defaultlaf=com.formdev.flatlaf.FlatLightLaf</argument>
             <argument>-Djava.util.logging.config.file=${project.basedir}/src/test/resources/logging.properties</argument>
             <argument>-cp</argument>
             <classpath/>
