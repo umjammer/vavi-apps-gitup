@@ -64,6 +64,7 @@ $ mvn exec:exec -Drepo=/path/to/repository
  - at repository browser, incremental search, when long time no see it, 1st char input causes spinning cursor. in that case delay start searching
  - hook editor: popup menu: make selected to preset
  - outsource hook preset, add search path by a system property
+ - ~~add `-` for each top of lines when "copy summary" ... option~~
 
 ---
 
