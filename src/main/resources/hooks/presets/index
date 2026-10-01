@@ -1,0 +1,3 @@
+# built-in hook presets, one file name a line
+main-branch-guard.sh
+bump-version-snapshot.sh

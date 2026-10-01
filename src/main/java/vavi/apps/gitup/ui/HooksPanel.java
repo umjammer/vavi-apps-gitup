@@ -9,6 +9,7 @@ package vavi.apps.gitup.ui;
 import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.Font;
+import java.awt.GridLayout;
 import java.awt.Rectangle;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
@@ -24,6 +25,7 @@ import javax.swing.BorderFactory;
 import javax.swing.JCheckBox;
 import javax.swing.JCheckBoxMenuItem;
 import javax.swing.JComboBox;
+import javax.swing.JDialog;
 import javax.swing.JLabel;
 import javax.swing.JMenu;
 import javax.swing.JMenuItem;
@@ -44,8 +46,10 @@ import javax.swing.tree.TreePath;
 
 import vavi.apps.gitup.model.GitHooks;
 import vavi.apps.gitup.model.GitHooks.Hook;
+import vavi.apps.gitup.model.GitHooks.Parameter;
 import vavi.apps.gitup.model.GitHooks.Preset;
 import vavi.apps.gitup.model.GitHooks.Scope;
+import vavi.apps.gitup.model.HookPresets;
 import vavi.apps.gitup.ui.icons.IconProvider;
 
 import static java.lang.System.getLogger;
@@ -74,6 +78,8 @@ public class HooksPanel extends JPanel {
     private final DefaultTreeModel model = new DefaultTreeModel(root);
     private final JTree tree = new JTree(model);
     private GitHooks hooks;
+    /** the built-in and the user presets */
+    private final HookPresets presets = new HookPresets();
     /** hooks made by "New Hook…" without a file yet */
     private final Set<Hook> pending = new LinkedHashSet<>();
     /** the state of the last refresh */
@@ -175,6 +181,7 @@ public class HooksPanel extends JPanel {
     private void popup(MouseEvent e) {
         TreePath p = tree.getPathForLocation(e.getX(), e.getY());
         if (p == null || hooks == null) return;
+        HookPresets.remote(); // starts loading the web presets
         tree.setSelectionPath(p);
         DefaultMutableTreeNode node = (DefaultMutableTreeNode) p.getLastPathComponent();
         JPopupMenu menu = new JPopupMenu();
@@ -188,14 +195,23 @@ public class HooksPanel extends JPanel {
             JMenu presets = new JMenu("Preset Hooks");
             String script = h.exists() ? GitHooks.read(h) : "";
             List<String> applied = GitHooks.presetsIn(script);
-            for (Preset preset : GitHooks.presets(h.name())) {
-                JCheckBoxMenuItem i = new JCheckBoxMenuItem(preset.title(), applied.contains(preset.id()));
-                i.setToolTipText(preset.description());
-                i.addActionListener(ev -> {
-                    if (i.isSelected()) applyPreset(h, preset);
-                    else removePreset(h, preset);
-                });
-                presets.add(i);
+            for (Preset preset : this.presets.presets(h.name())) {
+                presets.add(presetItem(h, preset, applied));
+            }
+            for (HookPresets.Remote remote : HookPresets.remote()) {
+                JMenu sub = new JMenu(remote.provider().name());
+                if (!remote.presets().isDone()) {
+                    sub.add(new JMenuItem("Loading…")).setEnabled(false);
+                } else if (remote.presets().isCompletedExceptionally()) {
+                    sub.add(new JMenuItem("Failed to load")).setEnabled(false);
+                } else {
+                    for (Preset preset : remote.presets().join()) {
+                        if (preset.category().equals(h.name())) sub.add(presetItem(h, preset, applied));
+                    }
+                    if (sub.getItemCount() == 0) sub.add(new JMenuItem("None for " + h.name())).setEnabled(false);
+                }
+                if (presets.getItemCount() > 0 && !(presets.getMenuComponent(presets.getMenuComponentCount() - 1) instanceof JMenu)) presets.addSeparator();
+                presets.add(sub);
             }
             presets.setEnabled(presets.getItemCount() > 0);
             menu.add(presets);
@@ -216,6 +232,20 @@ public class HooksPanel extends JPanel {
             return;
         }
         menu.show(tree, e.getX(), e.getY());
+    }
+
+    private JCheckBoxMenuItem presetItem(Hook h, Preset preset, List<String> applied) {
+        JCheckBoxMenuItem i = new JCheckBoxMenuItem(preset.title(), applied.contains(preset.id()));
+        i.setToolTipText("<html>" + escape(preset.description()) + "<br><small>" + escape(preset.source()) + "</small></html>");
+        i.addActionListener(ev -> {
+            if (i.isSelected()) applyPreset(h, preset);
+            else removePreset(h, preset);
+        });
+        return i;
+    }
+
+    private static String escape(String s) {
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
     }
 
     private static JMenuItem item(JPopupMenu menu, String label, Runnable r) {
@@ -264,17 +294,22 @@ public class HooksPanel extends JPanel {
             if (r != JOptionPane.OK_OPTION) return;
             script = "";
         }
-        String parameter = null;
-        if (preset.parameterLabel() != null) {
-            String current = GitHooks.parameterOf(script, preset);
-            JTextField field = new JTextField(current != null ? current : preset.defaultParameter(), 30);
-            JPanel p = new JPanel(new BorderLayout(0, 4));
-            p.add(new JLabel(preset.parameterLabel()), BorderLayout.NORTH);
-            p.add(field, BorderLayout.CENTER);
+        List<Parameter> params = preset.parameters();
+        List<String> values = null;
+        if (!params.isEmpty()) {
+            List<String> current = GitHooks.parametersOf(script, preset);
+            JPanel p = new JPanel(new GridLayout(0, 1, 0, 4));
+            List<JTextField> fields = new ArrayList<>();
+            for (int i = 0; i < params.size(); i++) {
+                JTextField field = new JTextField(current != null ? current.get(i) : params.get(i).defaultValue(), 30);
+                p.add(new JLabel(params.get(i).label() + ":"));
+                p.add(field);
+                fields.add(field);
+            }
             if (JOptionPane.showConfirmDialog(this, p, preset.title(), JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) return;
-            parameter = field.getText().strip().replaceAll("[\"`$\\\\]", "");
+            values = fields.stream().map(f -> f.getText().strip().replaceAll("[\"`$\\\\]", "")).toList();
         }
-        String result = GitHooks.applyPreset(script, preset, parameter);
+        String result = GitHooks.applyPreset(script, preset, values);
         write(h, result);
     }
 
@@ -282,19 +317,87 @@ public class HooksPanel extends JPanel {
         write(h, GitHooks.removePreset(GitHooks.read(h), preset));
     }
 
-    /** "Write New…" or "Edit…" */
+    /** the window state key of the hook editor */
+    private static final String EDITOR = "hookEditor";
+
+    /** "Write New…" or "Edit…", the dialog bounds are remembered */
     private void edit(Hook h) {
         String script = h.exists() ? GitHooks.read(h) : GitHooks.template(h.name());
         JTextArea text = new JTextArea(script, 24, 80);
         text.setFont(new Font(Font.MONOSPACED, Font.PLAIN, text.getFont().getSize()));
         text.setTabSize(4);
         text.setCaretPosition(0);
+        text.addMouseListener(new MouseAdapter() {
+            @Override public void mousePressed(MouseEvent e) { if (e.isPopupTrigger()) editorPopup(text, h, e); }
+            @Override public void mouseReleased(MouseEvent e) { if (e.isPopupTrigger()) editorPopup(text, h, e); }
+        });
         JPanel p = new JPanel(new BorderLayout(0, 4));
         p.add(new JLabel(h.file().toString()), BorderLayout.NORTH);
         p.add(new JScrollPane(text), BorderLayout.CENTER);
         String title = (h.exists() ? "Edit " : "Write ") + label(h.scope()) + " " + h.name() + " Hook";
-        if (JOptionPane.showConfirmDialog(this, p, title, JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) return;
+        JOptionPane pane = new JOptionPane(p, JOptionPane.PLAIN_MESSAGE, JOptionPane.OK_CANCEL_OPTION);
+        JDialog dialog = pane.createDialog(this, title);
+        dialog.setResizable(true);
+        boolean saved = WindowState.bounds(EDITOR) != null;
+        WindowState.remember(dialog, EDITOR, dialog.getSize());
+        if (!saved) dialog.setLocationRelativeTo(this);
+        dialog.setVisible(true);
+        dialog.dispose();
+        if (!Integer.valueOf(JOptionPane.OK_OPTION).equals(pane.getValue())) return;
         write(h, text.getText());
+    }
+
+    /** the hook editor popup */
+    private void editorPopup(JTextArea text, Hook h, MouseEvent e) {
+        JPopupMenu menu = new JPopupMenu();
+        int start = text.getSelectionStart(), end = text.getSelectionEnd();
+        boolean crosses = start < end && GitHooks.touchesPreset(text.getText(), start, end);
+        JMenuItem i = item(menu, "Make Preset from Selection…", () -> makePreset(text, h.name(), GitHooks.lines(text.getText(), start, end)));
+        i.setEnabled(start < end && !crosses);
+        if (crosses) i.setToolTipText("the selection must be outside of the preset blocks");
+        menu.show(text, e.getX(), e.getY());
+    }
+
+    /** saves the lines as a user preset */
+    private void makePreset(Component parent, String category, String lines) {
+        JTextField id = new JTextField(20);
+        JComboBox<String> categories = new JComboBox<>(GitHooks.CATEGORIES.toArray(String[]::new));
+        categories.setSelectedItem(category);
+        JTextField title = new JTextField(30);
+        JTextField description = new JTextField(30);
+        JTextArea body = new JTextArea(lines, 12, 70);
+        body.setFont(new Font(Font.MONOSPACED, Font.PLAIN, body.getFont().getSize()));
+        body.setTabSize(4);
+        JPanel fields = new JPanel(new GridLayout(0, 2, 4, 4));
+        fields.add(new JLabel("Id (file name):"));
+        fields.add(id);
+        fields.add(new JLabel("Hook:"));
+        fields.add(categories);
+        fields.add(new JLabel("Title:"));
+        fields.add(title);
+        fields.add(new JLabel("Description:"));
+        fields.add(description);
+        JPanel p = new JPanel(new BorderLayout(0, 4));
+        p.add(fields, BorderLayout.NORTH);
+        p.add(new JScrollPane(body), BorderLayout.CENTER);
+        p.add(new JLabel("<html>a parameter is written as <code>@PARAM:label:default@</code><br>saved in " + presets.saveDir() + "</html>"), BorderLayout.SOUTH);
+        while (true) {
+            if (JOptionPane.showConfirmDialog(parent, p, "Make Preset", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) return;
+            String error = null;
+            Preset existing = presets.get(id.getText().strip());
+            if (!id.getText().strip().matches("[\\w.-]+")) error = "the id must be letters, digits, '.', '_' or '-'";
+            else if (body.getText().isBlank()) error = "the script is empty";
+            else if (existing != null && !existing.source().equals(presets.saveDir().resolve(id.getText().strip() + ".sh").toString())) error = "the id is used by " + existing.source();
+            else if (existing != null && JOptionPane.showConfirmDialog(parent, "Replace the preset " + existing.source() + "?", "Make Preset",
+                    JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE) != JOptionPane.OK_OPTION) continue;
+            if (error != null) {
+                JOptionPane.showMessageDialog(parent, error, "Make Preset", JOptionPane.ERROR_MESSAGE);
+                continue;
+            }
+            String t = title.getText().strip();
+            if (run(() -> presets.save(id.getText().strip(), (String) categories.getSelectedItem(), t.isEmpty() ? id.getText().strip() : t,
+                    description.getText().strip(), body.getText()))) return;
+        }
     }
 
     private void write(Hook h, String script) {

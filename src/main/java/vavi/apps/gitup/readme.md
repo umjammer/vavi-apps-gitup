@@ -74,6 +74,18 @@
 * command history (⇧⌘H): the git commands equivalent to what was done (libgit2 / GitUpKit calls, GitUp's rewrites as
   `git rebase -i` with a note), ⌘C copies them ready for a terminal
 * copy (⌘C) almost everywhere, context menus for SHA, message, paths, lines, hunks, patch
+* git hooks (sidebar): global / local hooks, enable (executable bit), edit, preset hooks as blocks in a hook file
+    * presets: the built-in ones (`src/main/resources/hooks/presets/`), then `*.sh` in the directories of
+      `-Dgitup.hooks.path=dir1:dir2` (path separator), then `~/Library/Application Support/vavi-apps-gitup/hooks/presets`;
+      the first one of an id (the file name) wins
+    * a preset file: `# category: pre-push`, `# title: …`, `# description: …` lines, then the script;
+      a parameter is `@PARAM:label:default@` (asked when applied)
+    * hook editor, right click "Make Preset from Selection…": the selected lines (not over the preset markers) saved as a preset
+      in the first `gitup.hooks.path` directory, or the default one above
+    * presets from the web (`HookPresetProvider` SPI): [CompSciLauren/awesome-git-hooks](https://github.com/CompSciLauren/awesome-git-hooks),
+      [aitemr/awesome-git-hooks](https://github.com/aitemr/awesome-git-hooks), loaded at the first right click.
+      a hook file has one interpreter, so a whole script (python, perl, bash…) is run by its shebang's interpreter
+      as a here document (`python3 /dev/fd/3 "$@" 3<<'GITUP_EOF'`), it gets the arguments and the stdin, its failure stops the hook
 
 without a repository the last session's tabs are restored, or the repository browser is shown.
 

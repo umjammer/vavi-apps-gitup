@@ -14,7 +14,10 @@ import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermission;
 import java.util.ArrayList;
 import java.util.EnumSet;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -25,7 +28,7 @@ import java.util.regex.Pattern;
  * a hook is enabled when its file is executable, git ignores it otherwise.
  * <p>
  * preset scripts are written as blocks between markers, so several presets share one hook file
- * and applying a preset again replaces its block.
+ * and applying a preset again replaces its block. the presets are of {@link HookPresets}.
  *
  * @author <a href="mailto:umjammer@gmail.com">Naohide Sano</a> (nsano)
  * @version 0.00 2026-09-28 nsano initial version <br>
@@ -56,67 +59,55 @@ public class GitHooks {
         }
     }
 
-    /** a ready made hook script block */
-    public record Preset(String id, String category, String title, String description, String parameterLabel, String defaultParameter) {
-        /** the block for the hook file, the parameter replaces {@code @PARAM@} */
-        public String block(String parameter) {
-            String body = switch (id) {
-                case "main-branch-guard" -> MAIN_BRANCH_GUARD;
-                case "bump-version-snapshot" -> BUMP_VERSION_SNAPSHOT;
-                default -> throw new IllegalStateException(id);
-            };
-            return BEGIN + id + "\n" + body.replace("@PARAM@", parameter == null ? "" : parameter) + END + id + "\n";
+    /** a parameter of a preset, written as {@code @PARAM:label:default@} in its body */
+    public record Parameter(String label, String defaultValue) {}
+
+    /** {@code @PARAM:label:default@}, the label is the key, the same label means the same parameter */
+    static final Pattern PARAM = Pattern.compile("@PARAM:([^:@\\n]+):([^@\\n]*)@");
+
+    /**
+     * a ready made hook script block.
+     *
+     * @param id unique among presets, used in the block markers
+     * @param category the hook name the preset is for
+     * @param body the script, parameters are written as {@code @PARAM:label:default@}
+     * @param source where the preset came from (a resource, a file, a url), for tool tips
+     */
+    public record Preset(String id, String category, String title, String description, String body, String source) {
+
+        public Preset {
+            if (!id.matches("[\\w.-]+(/[\\w.-]+)*")) throw new IllegalArgumentException("bad preset id: " + id);
+            if (!body.isEmpty() && !body.endsWith("\n")) body += "\n";
         }
-    }
 
-    public static final List<Preset> PRESETS = List.of(
-            new Preset("main-branch-guard", "pre-push", "Protected branch guard",
-                    "rejects pushes to the protected branches", "Protected branches (space separated):", "main"),
-            new Preset("bump-version-snapshot", "pre-push", "\"bump version\" SNAPSHOT check",
-                    "rejects pushing a \"bump version\" commit whose pom.xml version is a -SNAPSHOT", null, null));
+        /** the distinct parameters in the body order */
+        public List<Parameter> parameters() {
+            Map<String, Parameter> map = new LinkedHashMap<>();
+            Matcher m = PARAM.matcher(body);
+            while (m.find()) map.putIfAbsent(m.group(1), new Parameter(m.group(1), m.group(2)));
+            return new ArrayList<>(map.values());
+        }
 
-    /** the presets for the hook */
-    public static List<Preset> presets(String category) {
-        return PRESETS.stream().filter(p -> p.category().equals(category)).toList();
+        /**
+         * the block for the hook file.
+         * @param values the values of {@link #parameters()} in order, a missing or null value is the default
+         */
+        public String block(List<String> values) {
+            List<Parameter> params = parameters();
+            Map<String, String> map = new HashMap<>();
+            for (int i = 0; i < params.size(); i++) {
+                String v = values != null && i < values.size() ? values.get(i) : null;
+                map.put(params.get(i).label(), v != null ? v : params.get(i).defaultValue());
+            }
+            String b = PARAM.matcher(body).replaceAll(r -> Matcher.quoteReplacement(map.get(r.group(1))));
+            return BEGIN + id + "\n" + b + END + id + "\n";
+        }
     }
 
     static final String BEGIN = "# >>> gitup preset: ";
     static final String END = "# <<< gitup preset: ";
     static final String MANAGED = "# managed by vavi-apps-gitup, blocks between the gitup preset markers are replaced by the app";
     static final String STDIN_LINE = "gitup_stdin=$(cat)";
-
-    private static final String MAIN_BRANCH_GUARD = """
-            gitup_protected="@PARAM@"
-            printf '%s\\n' "$gitup_stdin" | while read -r local_ref local_sha remote_ref remote_sha; do
-              [ -n "$remote_ref" ] || continue
-              for b in $gitup_protected; do
-                if [ "$remote_ref" = "refs/heads/$b" ]; then
-                  echo "gitup: pushing to the protected branch '$b' is not allowed" >&2
-                  exit 1
-                fi
-              done
-            done || exit 1
-            """;
-
-    private static final String BUMP_VERSION_SNAPSHOT = """
-            printf '%s\\n' "$gitup_stdin" | while read -r local_ref local_sha remote_ref remote_sha; do
-              case "$local_sha" in *[!0]*) ;; *) continue ;; esac
-              case "$remote_sha" in
-                *[!0]*) git cat-file -e "$remote_sha" 2>/dev/null && range="$remote_sha..$local_sha" || range="$local_sha --not --remotes" ;;
-                *) range="$local_sha --not --remotes" ;;
-              esac
-              for c in $(git rev-list $range); do
-                if git log -1 --format=%s "$c" | grep -qi 'bump version'; then
-                  v=$(git show "$c:pom.xml" 2>/dev/null | sed -e '/<parent>.*<\\/parent>/d' -e '/<parent>/,/<\\/parent>/d' | grep -m1 '<version>')
-                  case "$v" in
-                    *-SNAPSHOT*)
-                      echo "gitup: $(git rev-parse --short "$c") is a \\"bump version\\" but pom.xml is $(echo $v)" >&2
-                      exit 1 ;;
-                  esac
-                fi
-              done
-            done || exit 1
-            """;
 
     private final Path workdir;
     private final Path gitDir;
@@ -258,19 +249,46 @@ public class GitHooks {
         return ids;
     }
 
-    /** the parameter a preset block was written with, null when absent */
-    public static String parameterOf(String script, Preset preset) {
-        if (preset.parameterLabel() == null) return null;
-        Matcher m = Pattern.compile("^" + Pattern.quote(BEGIN + preset.id()) + "\\n\\w+=\"([^\"]*)\"", Pattern.MULTILINE).matcher(script);
-        return m.find() ? m.group(1) : null;
+    /**
+     * the parameter values a preset block was written with.
+     * @return values in the order of {@link Preset#parameters()}, null when the block is absent or was edited
+     */
+    public static List<String> parametersOf(String script, Preset preset) {
+        Matcher b = blockPattern(preset.id()).matcher(script);
+        if (!b.find()) return null;
+        String inner = b.group().substring((BEGIN + preset.id() + "\n").length());
+        inner = inner.substring(0, inner.lastIndexOf(END + preset.id()));
+        // the body as a regex, a parameter is a group, the same label again is a back reference
+        StringBuilder re = new StringBuilder();
+        Map<String, Integer> groups = new HashMap<>();
+        Matcher m = GitHooks.PARAM.matcher(preset.body());
+        int last = 0;
+        while (m.find()) {
+            re.append(Pattern.quote(preset.body().substring(last, m.start())));
+            Integer g = groups.get(m.group(1));
+            if (g != null) {
+                re.append("\\").append(g);
+            } else {
+                groups.put(m.group(1), groups.size() + 1);
+                re.append("([^\\n]*?)");
+            }
+            last = m.end();
+        }
+        re.append(Pattern.quote(preset.body().substring(last)));
+        Matcher v = Pattern.compile(re.toString(), Pattern.DOTALL).matcher(inner);
+        if (!v.matches()) return null;
+        List<String> values = new ArrayList<>();
+        for (int i = 1; i <= groups.size(); i++) values.add(v.group(i));
+        return values;
     }
 
     /**
      * @param script the current script, empty or managed ones only (others are replaced)
+     * @param values the parameter values, see {@link Preset#block(List)}
      * @return the script with the preset block added, or its block replaced
      */
-    public static String applyPreset(String script, Preset preset, String parameter) {
-        String block = preset.block(parameter);
+    public static String applyPreset(String script, Preset preset, List<String> values) {
+        String block = preset.block(values);
         if (!isManaged(script)) {
             return "#!/bin/sh\n" + MANAGED + "\n" + (STDIN.contains(preset.category()) ? STDIN_LINE + "\n" : "") + "\n" + block;
         }
@@ -282,6 +300,51 @@ public class GitHooks {
     /** removes the preset block */
     public static String removePreset(String script, Preset preset) {
         return Pattern.compile("\\n?" + blockPattern(preset.id()).pattern(), Pattern.MULTILINE | Pattern.DOTALL).matcher(script).replaceFirst("");
+    }
+
+    /**
+     * a whole hook script as a preset body.
+     * a hook file has one interpreter, so the script (python, perl, bash…) runs by the interpreter of its shebang
+     * as a here document, it gets the hook arguments and the stdin, and its failure stops the hook.
+     * its {@code exit 0} does not end the following blocks.
+     *
+     * @param category the hook name, for the stdin
+     */
+    public static String wrap(String script, String category) {
+        String interpreter = "/bin/sh";
+        if (script.startsWith("#!")) {
+            int eol = script.indexOf('\n');
+            interpreter = (eol < 0 ? script.substring(2) : script.substring(2, eol)).strip();
+        }
+        String eof = "GITUP_EOF";
+        for (int i = 1; Pattern.compile("^" + eof + "$", Pattern.MULTILINE).matcher(script).find(); i++) eof = "GITUP_EOF" + i;
+        return (STDIN.contains(category) ? "printf '%s\\n' \"$gitup_stdin\" | " : "")
+                + interpreter + " /dev/fd/3 \"$@\" 3<<'" + eof + "' || exit $?\n"
+                + script + (script.endsWith("\n") ? "" : "\n")
+                + eof + "\n";
+    }
+
+    /**
+     * true when the lines the range [start, end) touches are not free to be a new preset:
+     * they are in a preset block (markers included) or lines the app writes.
+     */
+    public static boolean touchesPreset(String script, int start, int end) {
+        for (String l : lines(script, start, end).split("\n")) {
+            if (l.startsWith(BEGIN) || l.startsWith(END) || l.equals(MANAGED) || l.equals(STDIN_LINE)) return true;
+        }
+        Matcher m = Pattern.compile("^" + Pattern.quote(BEGIN) + "(\\S+)$", Pattern.MULTILINE).matcher(script);
+        while (m.find()) {
+            Matcher b = blockPattern(m.group(1)).matcher(script);
+            if (b.find(m.start()) && b.start() == m.start() && start < b.end() && b.start() < Math.max(end, start + 1)) return true;
+        }
+        return false;
+    }
+
+    /** the whole lines the range [start, end) touches */
+    public static String lines(String script, int start, int end) {
+        int from = start == 0 ? 0 : script.lastIndexOf('\n', start - 1) + 1;
+        int to = script.indexOf('\n', Math.max(end - 1, from));
+        return script.substring(from, to < 0 ? script.length() : to + 1);
     }
 
     private static Pattern blockPattern(String id) {

@@ -41,8 +41,8 @@ class GitHooksTest {
     Path work;
     Path origin;
 
-    static final Preset GUARD = GitHooks.PRESETS.get(0);
-    static final Preset SNAPSHOT = GitHooks.PRESETS.get(1);
+    static final Preset GUARD = HookPresets.builtin().stream().filter(p -> p.id().equals("main-branch-guard")).findFirst().get();
+    static final Preset SNAPSHOT = HookPresets.builtin().stream().filter(p -> p.id().equals("bump-version-snapshot")).findFirst().get();
 
     @BeforeEach
     void setUp() throws Exception {
@@ -121,27 +121,28 @@ class GitHooksTest {
 
     @Test
     void presetBlocks() {
-        String s = GitHooks.applyPreset("", GUARD, "main");
+        String s = GitHooks.applyPreset("", GUARD, List.of("main"));
         assertTrue(GitHooks.isManaged(s));
         assertTrue(s.startsWith("#!/bin/sh\n"));
         s = GitHooks.applyPreset(s, SNAPSHOT, null);
         assertEquals(List.of(GUARD.id(), SNAPSHOT.id()), GitHooks.presetsIn(s));
-        assertEquals("main", GitHooks.parameterOf(s, GUARD));
-        String t = GitHooks.applyPreset(s, GUARD, "main release");
+        assertEquals(List.of("main"), GitHooks.parametersOf(s, GUARD));
+        assertEquals(List.of(), GitHooks.parametersOf(s, SNAPSHOT));
+        String t = GitHooks.applyPreset(s, GUARD, List.of("main release"));
         assertEquals(List.of(GUARD.id(), SNAPSHOT.id()), GitHooks.presetsIn(t));
-        assertEquals("main release", GitHooks.parameterOf(t, GUARD));
+        assertEquals(List.of("main release"), GitHooks.parametersOf(t, GUARD));
         assertEquals(s.length() + " release".length(), t.length());
         String u = GitHooks.removePreset(t, GUARD);
         assertEquals(List.of(SNAPSHOT.id()), GitHooks.presetsIn(u));
         assertNotEquals(t, u);
         // a foreign script is replaced
-        assertFalse(GitHooks.applyPreset("#!/bin/sh\necho hi\n", GUARD, "main").contains("echo hi"));
+        assertFalse(GitHooks.applyPreset("#!/bin/sh\necho hi\n", GUARD, List.of("main")).contains("echo hi"));
     }
 
     @Test
     void mainBranchGuard() throws Exception {
         Hook hook = hooks().hook(Scope.LOCAL, "pre-push");
-        GitHooks.write(hook, GitHooks.applyPreset("", GUARD, "main"));
+        GitHooks.write(hook, GitHooks.applyPreset("", GUARD, List.of("main")));
         commit("first", "1.0");
         assertNotEquals(0, git(work, "push", "-q", "origin", "main"));
         assertEquals(0, git(work, "push", "-q", "origin", "main:topic"));
@@ -164,5 +165,94 @@ class GitHooksTest {
         assertEquals(0, git(work, "push", "-q", "origin", "main"));
         commit("bump version", "1.2-SNAPSHOT");
         assertNotEquals(0, git(work, "push", "-q", "origin", "main:new-branch")); // a new remote branch
+    }
+
+    @Test
+    void defaultParameter() {
+        assertEquals(List.of(new GitHooks.Parameter("Protected branches (space separated)", "main")), GUARD.parameters());
+        String s = GitHooks.applyPreset("", GUARD, null);
+        assertTrue(s.contains("gitup_protected=\"main\"\n"));
+        assertFalse(s.contains("@PARAM"));
+    }
+
+    @Test
+    void parameters() {
+        Preset p = new Preset("p", "pre-commit", "t", "d", "a=\"@PARAM:A:1@\"\nb=\"@PARAM:B:2@\" a2=\"@PARAM:A:1@\"\n", "test");
+        assertEquals(2, p.parameters().size());
+        String s = GitHooks.applyPreset("", p, List.of("x y", "$z"));
+        assertTrue(s.contains("a=\"x y\"\nb=\"$z\" a2=\"x y\"\n"));
+        assertEquals(List.of("x y", "$z"), GitHooks.parametersOf(s, p));
+        assertNull(GitHooks.parametersOf(s.replace("b=", "c="), p)); // edited
+    }
+
+    @Test
+    void userPresets() throws Exception {
+        Path a = Files.createDirectories(dir.resolve("a"));
+        Path b = Files.createDirectories(dir.resolve("b"));
+        Files.writeString(b.resolve("main-branch-guard.sh"), "# category: pre-commit\n\nexit 1\n"); // shadowed by the built-in
+        Files.writeString(b.resolve("x.sh"), "# category: pre-commit\n# title: X\n\necho x\n");
+        Files.writeString(b.resolve("bad.sh"), "# category: nothing\necho x\n");
+        HookPresets presets = new HookPresets(List.of(a, b));
+        assertEquals(a, presets.saveDir());
+        assertEquals("pre-push", presets.get("main-branch-guard").category());
+        assertEquals("X", presets.get("x").title());
+        assertEquals("echo x\n", presets.get("x").body());
+        assertNull(presets.get("bad"));
+        Preset y = presets.save("y", "pre-commit", "Y", "why", "echo @PARAM:Word:y@\n");
+        assertEquals(y, presets.get("y"));
+        assertEquals(List.of("y", "x"), presets.presets("pre-commit").stream().map(Preset::id).toList());
+    }
+
+    @Test
+    void markers() {
+        String s = GitHooks.applyPreset(GitHooks.applyPreset("", GUARD, null), SNAPSHOT, null);
+        int i = s.indexOf("gitup_protected");
+        assertTrue(GitHooks.touchesPreset(s, i, i + 10)); // inside a block
+        assertTrue(GitHooks.touchesPreset(s, i - 5, i + 10)); // the begin marker line
+        assertTrue(GitHooks.touchesPreset(s, i, s.indexOf(GitHooks.END) + 3));
+        String u = s + "\necho mine\n";
+        int j = u.indexOf("echo mine");
+        assertFalse(GitHooks.touchesPreset(u, j, j + 4)); // outside
+        assertTrue(GitHooks.touchesPreset(u, j - 3, j + 4)); // over the end marker
+        assertEquals("gitup_protected=\"main\"\n", GitHooks.lines(s, s.indexOf("gitup_protected") + 3, s.indexOf("gitup_protected") + 5));
+    }
+
+    @Test
+    void wrapped() throws Exception {
+        // a python and a bash script in one hook
+        Preset py = new Preset("py", "pre-push", "py", "", GitHooks.wrap("""
+                #!/usr/bin/env python3
+                import sys
+                local_ref, local_sha, remote_ref, remote_sha = sys.stdin.read().split()
+                sys.exit(1 if remote_ref == "refs/heads/main" else 0)
+                """, "pre-push"), "test");
+        Preset sh = new Preset("sh", "pre-push", "sh", "", GitHooks.wrap("""
+                #!/bin/bash
+                [[ "$1" == origin ]] || exit 1
+                exit 0
+                """, "pre-push"), "test");
+        Hook hook = hooks().hook(Scope.LOCAL, "pre-push");
+        GitHooks.write(hook, GitHooks.applyPreset(GitHooks.applyPreset("", sh, null), py, null));
+        commit("first", "1.0");
+        assertNotEquals(0, git(work, "push", "-q", "origin", "main"));
+        assertEquals(0, git(work, "push", "-q", "origin", "main:topic"));
+        assertNotEquals(0, git(work, "push", "-q", origin.toString(), "main:topic2"));
+    }
+
+    @Test
+    void gitHubPaths() {
+        String json = "{\"tree\":[{\"path\":\"pre-push/pre-push-protect-branches\",\"mode\":\"100644\",\"type\":\"blob\",\"sha\":\"x\"},"
+                + "{\"path\":\"pre-push\",\"mode\":\"040000\",\"type\":\"tree\",\"sha\":\"y\"},"
+                + "{\"path\":\"pre-push/README.md\",\"mode\":\"100644\",\"type\":\"blob\",\"sha\":\"z\"}]}";
+        assertEquals(List.of("pre-push/pre-push-protect-branches", "pre-push/README.md"), GitHubHookPresetProvider.paths(json));
+        var aitemr = new GitHubHookPresetProvider.Aitemr();
+        assertEquals("pre-push", aitemr.category("pre-push/pre-push-protect-branches"));
+        assertNull(aitemr.category("pre-push/README.md"));
+        var lauren = new GitHubHookPresetProvider.CompSciLauren();
+        assertEquals("post-update", lauren.category("post-update-hooks/update-server-info.hook"));
+        assertEquals("fsmonitor-watchman", lauren.category("query-watchman-hooks/fsmonitor-watchman.hook"));
+        assertEquals("compscilauren.prevent-bad-push", lauren.id("pre-push-hooks/prevent-bad-push.hook"));
+        assertEquals("Deletes all .pyc files every time a new branch is checked out.",
+                GitHubHookPresetProvider.description("#!/usr/bin/env python3\n# Based on a hook\n# Source: x\n#\n# Deletes all .pyc files every time a new branch is checked out.\n"));
     }
 }
