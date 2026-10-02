@@ -638,11 +638,26 @@ public class GitRepo implements AutoCloseable {
             }
             try (LazyPatch patch = openPatch(new FileChange(f.path(), f.oldPath(), f.kind(), false))) {
                 if (patch == null) continue;
-                if (patch.isBinary()) throw new GitException("cannot discard a binary file: " + f.path());
+                if (patch.isBinary()) {
+                    checkoutIndex(f.path());
+                    continue;
+                }
                 String p = PartialPatchBuilder.build(patch, PartialPatchBuilder.all(patch), true);
                 if (p != null) apply0(p, GIT_APPLY_LOCATION_WORKDIR);
             }
         }
+    }
+
+    /** overwrites the working directory files with the index (used for binary files, a patch cannot do) */
+    private void checkoutIndex(String... paths) {
+        GitStrarray sa = new GitStrarray();
+        sa.set(paths);
+        Pointer opts = LibGit2.forceCheckoutOptions();
+        opts.setInt(4, GIT_CHECKOUT_FORCE | GIT_CHECKOUT_DISABLE_PATHSPEC_MATCH);
+        opts.setPointer(LibGit2.CHECKOUT_OPTIONS_PATHS, sa.strings);
+        opts.setNativeLong(LibGit2.CHECKOUT_OPTIONS_PATHS + com.sun.jna.Native.POINTER_SIZE, sa.count);
+        check(git.git_checkout_index(handle(), null, opts), "checkout index");
+        java.lang.ref.Reference.reachabilityFence(sa);
     }
 
     // commit

@@ -245,9 +245,15 @@ public interface LibGit2 extends Library {
     int git_checkout_options_init(Pointer opts, int version);
     /** NOTE: NULL opts is a dry run (GIT_CHECKOUT_NONE), use {@link #safeCheckoutOptions()} */
     int git_checkout_tree(Pointer repo, Pointer treeish, Pointer opts);
+    /** index may be NULL: the repository's index */
+    int git_checkout_index(Pointer repo, Pointer index, Pointer opts);
 
     int GIT_CHECKOUT_SAFE = 1 << 0;
     int GIT_CHECKOUT_FORCE = 1 << 1;
+    int GIT_CHECKOUT_DISABLE_PATHSPEC_MATCH = 1 << 13;
+
+    /** offset of git_strarray paths in git_checkout_options (64 bit) */
+    int CHECKOUT_OPTIONS_PATHS = 64;
 
     /** git_checkout_options with GIT_CHECKOUT_FORCE (local changes are overwritten) */
     static Pointer forceCheckoutOptions() {
