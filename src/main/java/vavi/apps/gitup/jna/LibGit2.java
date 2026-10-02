@@ -353,6 +353,28 @@ public interface LibGit2 extends Library {
     int git_stash_pop(Pointer repo, NativeLong index, Pointer options);
     int git_stash_drop(Pointer repo, NativeLong index);
     int git_stash_foreach(Pointer repo, StashCallback callback, Pointer payload);
+    int git_stash_apply_options_init(Pointer opts, int version);
+
+    int GIT_STASH_APPLY_REINSTATE_INDEX = 1 << 0;
+    int GIT_ECONFLICT = -13;
+
+    /**
+     * git_stash_apply_options with the flags.
+     * <pre>
+     * unsigned int version @0; uint32_t flags @4; git_checkout_options checkout_options @8; ...
+     * </pre>
+     * the layout is checked with the values git_stash_apply_options_init writes.
+     */
+    static Pointer stashApplyOptions(int flags) {
+        com.sun.jna.Memory m = new com.sun.jna.Memory(1024);
+        m.clear();
+        INSTANCE.git_stash_apply_options_init(m, 1);
+        if (m.getInt(0) != 1 || m.getInt(8) != 1) {
+            throw new IllegalStateException("unexpected git_stash_apply_options layout in this libgit2");
+        }
+        m.setInt(4, flags);
+        return m;
+    }
 
     // config / ignore
 

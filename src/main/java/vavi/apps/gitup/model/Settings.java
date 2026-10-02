@@ -205,6 +205,19 @@ public final class Settings {
         changed();
     }
 
+    /**
+     * true (default): the log's history rewrites (squash, fixup, move, delete) stash the local changes
+     * without asking (as "gitup-autostash") and pop them afterwards, false: they need a clean working copy
+     */
+    public boolean autoStash() {
+        return prefs.getBoolean("history.autoStash", true);
+    }
+
+    public void setAutoStash(boolean stash) {
+        prefs.putBoolean("history.autoStash", stash);
+        changed();
+    }
+
     private static String blankToNull(String s) {
         return s == null || s.isBlank() ? null : s;
     }
