@@ -75,6 +75,8 @@ public class RepositoryBrowser extends JFrame {
     private final DefaultTreeModel model = new DefaultTreeModel(rootNode);
     private final JTree tree = new JTree(model);
     private final JTextField search = new JTextField();
+    /** filters after a pause in typing, not on every keystroke */
+    private final javax.swing.Timer searchTimer = new javax.swing.Timer(150, e -> rebuild());
 
     /** @param opener opens a repository in a tab */
     public RepositoryBrowser(Bookmarks bookmarks, Path file, Consumer<Path> opener) {
@@ -87,7 +89,7 @@ public class RepositoryBrowser extends JFrame {
         tree.setRootVisible(false);
         tree.setShowsRootHandles(true);
         tree.setRowHeight(0); // variable, repositories show two lines
-        tree.setCellRenderer(new Renderer(status));
+        tree.setCellRenderer(new Renderer(status, heads));
         ToolTipManager.sharedInstance().registerComponent(tree);
         tree.addTreeExpansionListener(new javax.swing.event.TreeExpansionListener() {
             @Override public void treeExpanded(javax.swing.event.TreeExpansionEvent e) { expansionChanged(e.getPath(), true); }
@@ -122,10 +124,11 @@ public class RepositoryBrowser extends JFrame {
 
         search.putClientProperty("JTextField.placeholderText", "Search");
         search.putClientProperty("JTextField.showClearButton", true);
+        searchTimer.setRepeats(false);
         search.getDocument().addDocumentListener(new DocumentListener() {
-            @Override public void insertUpdate(DocumentEvent e) { rebuild(); }
-            @Override public void removeUpdate(DocumentEvent e) { rebuild(); }
-            @Override public void changedUpdate(DocumentEvent e) { rebuild(); }
+            @Override public void insertUpdate(DocumentEvent e) { searchTimer.restart(); }
+            @Override public void removeUpdate(DocumentEvent e) { searchTimer.restart(); }
+            @Override public void changedUpdate(DocumentEvent e) { searchTimer.restart(); }
         });
 
         JToolBar bar = new JToolBar();
@@ -155,6 +158,7 @@ public class RepositoryBrowser extends JFrame {
         addWindowListener(new java.awt.event.WindowAdapter() {
             @Override public void windowActivated(java.awt.event.WindowEvent e) {
                 if (System.currentTimeMillis() - statusTime > STATUS_INTERVAL) refreshStatus();
+                else refreshHeads(); // a branch may have been checked out in a tab meanwhile
             }
         });
     }
@@ -172,6 +176,35 @@ public class RepositoryBrowser extends JFrame {
         return t;
     });
 
+    /**
+     * repository → its working directory state, read on the status thread so that painting
+     * (every row, on every rebuild) does no file i/o. missing until read.
+     */
+    private final java.util.Map<Path, Head> heads = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** @param branch null when unknown, exists false when the directory is missing */
+    record Head(boolean exists, String branch) {
+        static Head of(Path repo) {
+            boolean exists = Files.isDirectory(repo);
+            return new Head(exists, exists ? branchOf(repo) : null);
+        }
+    }
+
+    /** rereads the current branch of every bookmarked repository, in the background */
+    private void refreshHeads() {
+        List<Path> repos = new ArrayList<>();
+        collectRepos(bookmarks.root(), repos);
+        statusExecutor.execute(() -> {
+            for (Path p : repos) updateHead(p);
+        });
+    }
+
+    /** on the status thread */
+    private void updateHead(Path p) {
+        Head h = Head.of(p);
+        if (!h.equals(heads.put(p, h))) javax.swing.SwingUtilities.invokeLater(() -> repoChanged(p));
+    }
+
     /** recomputes ahead / behind of every bookmarked repository (as of their last fetch), in the background */
     public void refreshStatus() {
         statusTime = System.currentTimeMillis();
@@ -182,9 +215,10 @@ public class RepositoryBrowser extends JFrame {
     private void refreshStatus(boolean missingOnly) {
         List<Path> repos = new ArrayList<>();
         collectRepos(bookmarks.root(), repos);
-        if (missingOnly) repos.removeIf(status::containsKey);
+        if (missingOnly) repos.removeIf(p -> status.containsKey(p) && heads.containsKey(p));
         if (repos.isEmpty()) return;
         statusExecutor.execute(() -> {
+            for (Path p : repos) updateHead(p); // cheap, shown before the slower ahead / behind
             for (Path p : repos) {
                 java.util.Optional<vavi.apps.gitup.model.GitRepo.AheadBehind> ab = aheadBehind(p);
                 if (!ab.equals(status.put(p, ab))) javax.swing.SwingUtilities.invokeLater(() -> repoChanged(p));
@@ -546,46 +580,125 @@ public class RepositoryBrowser extends JFrame {
         }
     }
 
+    /**
+     * groups are plain labels, repositories a painted two line cell. no html: parsing and laying
+     * out an html view per row made every rebuild (each keystroke in the search field) slow.
+     */
     private static class Renderer extends DefaultTreeCellRenderer {
         private final java.util.Map<Path, java.util.Optional<vavi.apps.gitup.model.GitRepo.AheadBehind>> status;
+        private final java.util.Map<Path, Head> heads;
+        private final RepoCell repoCell = new RepoCell();
 
-        Renderer(java.util.Map<Path, java.util.Optional<vavi.apps.gitup.model.GitRepo.AheadBehind>> status) {
+        Renderer(java.util.Map<Path, java.util.Optional<vavi.apps.gitup.model.GitRepo.AheadBehind>> status, java.util.Map<Path, Head> heads) {
             this.status = status;
+            this.heads = heads;
         }
 
         @Override
         public Component getTreeCellRendererComponent(JTree t, Object v, boolean sel, boolean exp, boolean leaf, int row, boolean focus) {
+            Object o = ((DefaultMutableTreeNode) v).getUserObject();
+            if (o instanceof Repo r) {
+                Head head = heads.getOrDefault(r.path(), new Head(true, null)); // not read yet
+                vavi.apps.gitup.model.GitRepo.AheadBehind ab = status.getOrDefault(r.path(), java.util.Optional.empty()).orElse(null);
+                if (ab != null && !ab.branch().equals(head.branch())) ab = null; // checked out another branch since
+                repoCell.set(t, r, head, ab, sel ? getTextSelectionColor() : getTextNonSelectionColor());
+                return repoCell;
+            }
             super.getTreeCellRendererComponent(t, v, sel, exp, leaf, row, focus);
             setBorder(javax.swing.BorderFactory.createEmptyBorder(4, 2, 4, 2)); // roomier lines (rows have variable height)
-            Object o = ((DefaultMutableTreeNode) v).getUserObject();
-            setIcon(null);
-            if (o instanceof Repo r) {
-                setIcon(IconProvider.tinted(IconProvider.get().icon(IconProvider.Key.REPOSITORY, 16), IconProvider.LIGHT_BLUE));
-                boolean exists = Files.isDirectory(r.path());
-                String branch = exists ? branchOf(r.path()) : null;
-                vavi.apps.gitup.model.GitRepo.AheadBehind ab = status.getOrDefault(r.path(), java.util.Optional.empty()).orElse(null);
-                if (ab != null && !ab.branch().equals(branch)) ab = null; // checked out another branch since
-                String counts = ab == null ? ""
-                        : (ab.ahead() > 0 ? "&nbsp;&nbsp;<font color='#1a7f37'><b>↑</b>&nbsp;" + ab.ahead() + "</font>" : "")
-                        + (ab.behind() > 0 ? "&nbsp;&nbsp;<font color='#bc4c00'><b>↓</b>&nbsp;" + ab.behind() + "</font>" : "");
-                setText("<html><b>" + esc(r.name()) + "</b>" + (branch != null ? " <font color='#0969da'>" + esc(branch) + "</font>" : "") + counts
-                        + "<br><font color='gray' size='-2'>" + esc(r.path().toString()) + (exists ? "" : " (missing)") + "</font></html>");
-                setToolTipText(ab == null ? r.path().toString() : "<html>" + esc(r.path().toString()) + "<br>" + esc(ab.branch()) + ": "
-                        + ab.ahead() + " ahead, " + ab.behind() + " behind " + esc(ab.upstream()) + " (as of the last fetch)</html>");
-            } else if (o instanceof Group g) {
-                setIcon(IconProvider.tinted(IconProvider.get().icon(IconProvider.Key.FOLDER, 16), IconProvider.LIGHT_BLUE));
-                setText(g.name());
-                setFont(t.getFont().deriveFont(java.awt.Font.BOLD));
-                setToolTipText(null);
-                return this;
-            }
-            setFont(t.getFont());
+            setIcon(o instanceof Group ? IconProvider.tinted(IconProvider.get().icon(IconProvider.Key.FOLDER, 16), IconProvider.LIGHT_BLUE) : null);
+            setFont(t.getFont().deriveFont(java.awt.Font.BOLD));
+            setToolTipText(null);
             return this;
+        }
+    }
+
+    /** a repository row: icon, bold name, branch, ahead / behind, and the path below in small gray */
+    private static class RepoCell extends JComponent {
+        private static final java.awt.Color BRANCH = new java.awt.Color(0x0969da);
+        private static final java.awt.Color AHEAD = new java.awt.Color(0x1a7f37);
+        private static final java.awt.Color BEHIND = new java.awt.Color(0xbc4c00);
+        private static final int PAD = 4, GAP = 4, SPACE = 8;
+
+        private final javax.swing.Icon icon = IconProvider.tinted(IconProvider.get().icon(IconProvider.Key.REPOSITORY, 16), IconProvider.LIGHT_BLUE);
+        private java.awt.Font plain, bold, small;
+        private String name, branch, ahead, behind, path;
+        private java.awt.Color foreground;
+        private String toolTip;
+
+        void set(JTree t, Repo r, Head head, vavi.apps.gitup.model.GitRepo.AheadBehind ab, java.awt.Color fg) {
+            if (plain != t.getFont()) {
+                plain = t.getFont();
+                bold = plain.deriveFont(java.awt.Font.BOLD);
+                small = plain.deriveFont(plain.getSize2D() - 2);
+            }
+            name = r.name();
+            branch = head.branch();
+            ahead = ab != null && ab.ahead() > 0 ? "↑ " + ab.ahead() : null;
+            behind = ab != null && ab.behind() > 0 ? "↓ " + ab.behind() : null;
+            path = r.path() + (head.exists() ? "" : " (missing)");
+            foreground = fg;
+            toolTip = ab == null ? r.path().toString() : "<html>" + esc(r.path().toString()) + "<br>" + esc(ab.branch()) + ": "
+                    + ab.ahead() + " ahead, " + ab.behind() + " behind " + esc(ab.upstream()) + " (as of the last fetch)</html>";
+        }
+
+        /** asked by JTree.getToolTipText(), without registering every cell to the ToolTipManager */
+        @Override public String getToolTipText() {
+            return toolTip;
         }
 
         private static String esc(String s) {
             return s.replace("&", "&amp;").replace("<", "&lt;");
         }
+
+        @Override public java.awt.Dimension getPreferredSize() {
+            java.awt.FontMetrics fb = getFontMetrics(bold), fp = getFontMetrics(plain), fs = getFontMetrics(small);
+            int w = fb.stringWidth(name);
+            if (branch != null) w += SPACE + fp.stringWidth(branch);
+            if (ahead != null) w += SPACE + fp.stringWidth(ahead);
+            if (behind != null) w += SPACE + fp.stringWidth(behind);
+            w = Math.max(w, fs.stringWidth(path));
+            int h = Math.max(fb.getHeight(), fp.getHeight()) + fs.getHeight();
+            return new java.awt.Dimension(2 + icon.getIconWidth() + GAP + w + 2, Math.max(h, icon.getIconHeight()) + PAD * 2);
+        }
+
+        @Override protected void paintComponent(java.awt.Graphics g) {
+            java.awt.Graphics2D g2 = (java.awt.Graphics2D) g.create();
+            try {
+                java.awt.FontMetrics fb = getFontMetrics(bold), fp = getFontMetrics(plain), fs = getFontMetrics(small);
+                int line1 = Math.max(fb.getHeight(), fp.getHeight());
+                icon.paintIcon(this, g2, 2, PAD + (line1 - icon.getIconHeight()) / 2);
+                int x = 2 + icon.getIconWidth() + GAP;
+                int y = PAD + Math.max(fb.getAscent(), fp.getAscent());
+                g2.setFont(bold);
+                g2.setColor(foreground);
+                javax.swing.plaf.basic.BasicGraphicsUtils.drawString(this, g2, name, x, y);
+                x += fb.stringWidth(name);
+                g2.setFont(plain);
+                x = draw(g2, fp, branch, BRANCH, x, y);
+                x = draw(g2, fp, ahead, AHEAD, x, y);
+                draw(g2, fp, behind, BEHIND, x, y);
+                g2.setFont(small);
+                g2.setColor(java.awt.Color.gray);
+                javax.swing.plaf.basic.BasicGraphicsUtils.drawString(this, g2, path, 2 + icon.getIconWidth() + GAP, PAD + line1 + fs.getAscent());
+            } finally {
+                g2.dispose();
+            }
+        }
+
+        private int draw(java.awt.Graphics2D g, java.awt.FontMetrics fm, String s, java.awt.Color c, int x, int y) {
+            if (s == null) return x;
+            g.setColor(c);
+            javax.swing.plaf.basic.BasicGraphicsUtils.drawString(this, g, s, x + SPACE, y);
+            return x + SPACE + fm.stringWidth(s);
+        }
+
+        // a renderer: skip the repaint / revalidate bookkeeping (as DefaultTreeCellRenderer does)
+        @Override public void revalidate() {}
+        @Override public void repaint(long tm, int x, int y, int w, int h) {}
+        @Override public void repaint(java.awt.Rectangle r) {}
+        @Override public void repaint() {}
+        @Override protected void firePropertyChange(String p, Object o, Object n) {}
     }
 
     // drag and drop

@@ -61,7 +61,7 @@ $ mvn exec:exec -Drepo=/path/to/repository
  - ~~when git push, git hook -> plugin, built-in like SNAPSHOT checker~~
  - ~~log pane toolbar, back gray, button bg gray, fg dark gray like `x` button of tab~~
  - ~~external tool search dir recursively~~
- - at repository browser, incremental search: when long time no see it, 1st char input causes spinning cursor. in that case delay start searching
+ - ~~at repository browser, incremental search: when long time no see it, 1st char input causes spinning cursor. in that case delay start searching~~
  - ~~hook editor, popup menu: make selected to preset~~
  - ~~outsource hook preset, add search path by a system property~~
  - ~~hook presets from the web (awesome-git-hooks)~~
