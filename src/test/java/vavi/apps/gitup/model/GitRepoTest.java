@@ -26,6 +26,7 @@ import vavi.apps.gitup.jna.GitUpKitLocator;
 import vavi.apps.gitup.model.CommitLog.CommitRow;
 import vavi.apps.gitup.model.LazyPatch.Row;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -270,6 +271,29 @@ class GitRepoTest {
         write("new.txt", "hello\n");
         repo.discard(repo.status().unstaged());
         assertEquals("", sh("status", "--porcelain"));
+    }
+
+    @Test
+    void discardBinaryFiles() throws Exception {
+        byte[] bin = {0, 1, 2, 3, 0, (byte) 0xff, 'a', 0};
+        Files.write(dir.resolve("a.bin"), bin);
+        Files.write(dir.resolve("b.bin"), bin);
+        sh("add", "a.bin", "b.bin");
+        sh("commit", "-q", "-m", "bin");
+        byte[] staged = {9, 0, 8, 0, 7};
+        Files.write(dir.resolve("a.bin"), staged);
+        sh("add", "a.bin");
+        Files.write(dir.resolve("a.bin"), new byte[] {0, 0, 0});
+        Files.delete(dir.resolve("b.bin"));
+        try (LazyPatch p = repo.openPatch(unstaged("a.bin"))) {
+            assertTrue(p.isBinary());
+        }
+
+        repo.discard(repo.status().unstaged());
+
+        assertEquals("M  a.bin\n", sh("status", "--porcelain"));
+        assertArrayEquals(staged, Files.readAllBytes(dir.resolve("a.bin")), "restored from the index");
+        assertArrayEquals(bin, Files.readAllBytes(dir.resolve("b.bin")));
     }
 
     @Test

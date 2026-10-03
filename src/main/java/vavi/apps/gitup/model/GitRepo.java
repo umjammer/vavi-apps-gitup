@@ -638,11 +638,26 @@ public class GitRepo implements AutoCloseable {
             }
             try (LazyPatch patch = openPatch(new FileChange(f.path(), f.oldPath(), f.kind(), false))) {
                 if (patch == null) continue;
-                if (patch.isBinary()) throw new GitException("cannot discard a binary file: " + f.path());
+                if (patch.isBinary()) {
+                    checkoutIndex(f.path());
+                    continue;
+                }
                 String p = PartialPatchBuilder.build(patch, PartialPatchBuilder.all(patch), true);
                 if (p != null) apply0(p, GIT_APPLY_LOCATION_WORKDIR);
             }
         }
+    }
+
+    /** overwrites the working directory files with the index (used for binary files, a patch cannot do) */
+    private void checkoutIndex(String... paths) {
+        GitStrarray sa = new GitStrarray();
+        sa.set(paths);
+        Pointer opts = LibGit2.forceCheckoutOptions();
+        opts.setInt(4, GIT_CHECKOUT_FORCE | GIT_CHECKOUT_DISABLE_PATHSPEC_MATCH);
+        opts.setPointer(LibGit2.CHECKOUT_OPTIONS_PATHS, sa.strings);
+        opts.setNativeLong(LibGit2.CHECKOUT_OPTIONS_PATHS + com.sun.jna.Native.POINTER_SIZE, sa.count);
+        check(git.git_checkout_index(handle(), null, opts), "checkout index");
+        java.lang.ref.Reference.reachabilityFence(sa);
     }
 
     // commit
@@ -1624,6 +1639,59 @@ public class GitRepo implements AutoCloseable {
 
     public void stashDrop(int index) {
         cmd("git stash drop stash@{" + index + "}");
+        check(git.git_stash_drop(handle(), new NativeLong(index)), "stash drop");
+    }
+
+    /** the message of the stashes made by {@link #autoStash()} */
+    public static final String AUTO_STASH_MESSAGE = "gitup-autostash";
+
+    /**
+     * stashes the tracked local changes (staged and unstaged, untracked files stay) under {@link #AUTO_STASH_MESSAGE}
+     * so that an operation needing a clean working copy can run, give it back with {@link #autoStashPop(String)}.
+     *
+     * @return the stash commit, null when there was nothing to stash
+     */
+    public String autoStash() {
+        cmd("git stash push -m " + AUTO_STASH_MESSAGE, "auto stash");
+        Pointer sig = signature();
+        try {
+            GitOid id = new GitOid();
+            int rc = git.git_stash_save(id, handle(), sig, AUTO_STASH_MESSAGE, 0);
+            if (rc == GIT_ENOTFOUND) return null;
+            check(rc, "stash");
+            id.read();
+            return id.hex();
+        } finally {
+            git.git_signature_free(sig);
+        }
+    }
+
+    /**
+     * applies the stash made by {@link #autoStash()} (with its index when possible) and drops it.
+     * when it conflicts with the new HEAD, the conflicts are left in the working copy and the stash is kept.
+     *
+     * @param oid the stash commit {@link #autoStash()} returned
+     * @throws GitException when the stash was not given back (it is kept)
+     */
+    public void autoStashPop(String oid) {
+        int index = stashes().stream().filter(s -> s.oid().equals(oid)).mapToInt(Stash::index).findFirst()
+                .orElseThrow(() -> new GitException("the auto stash " + oid.substring(0, 7) + " is gone"));
+        cmd("git stash pop --index stash@{" + index + "}", "auto stash");
+        int rc = git.git_stash_apply(handle(), new NativeLong(index), stashApplyOptions(GIT_STASH_APPLY_REINSTATE_INDEX));
+        if (rc == GIT_ECONFLICT) {
+            // the staged changes do not apply to the new index on their own: everything goes back unstaged
+            cmd("git stash pop stash@{" + index + "}", "auto stash: the index could not be reinstated");
+            rc = git.git_stash_apply(handle(), new NativeLong(index), stashApplyOptions(0));
+        }
+        String kept = ", they are kept in the stash \"" + AUTO_STASH_MESSAGE + "\" (stash@{" + index + "})";
+        try {
+            check(rc, "stash apply");
+        } catch (GitException e) {
+            throw new GitException("the local changes could not be restored (" + e.getMessage() + ")" + kept, e.code());
+        }
+        if (!conflictedPaths().isEmpty()) {
+            throw new GitException("the local changes conflict with the new HEAD, resolve them" + kept);
+        }
         check(git.git_stash_drop(handle(), new NativeLong(index)), "stash drop");
     }
 

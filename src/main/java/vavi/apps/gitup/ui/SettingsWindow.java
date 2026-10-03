@@ -416,10 +416,16 @@ public class SettingsWindow extends JFrame {
         JLabel listNote = new JLabel("<html><font color='gray'>the log's Copy > Summary prefixes each line with \"- \", "
                 + "e.g. for release notes</font></html>");
         listNote.setBorder(BorderFactory.createEmptyBorder(0, 24, 0, 0));
+        javax.swing.JCheckBox stash = new javax.swing.JCheckBox("Stash local changes automatically", settings.autoStash());
+        stash.addActionListener(e -> settings.setAutoStash(stash.isSelected()));
+        JLabel stashNote = new JLabel("<html><font color='gray'>squash, fixup, move and delete in the log stash uncommitted changes "
+                + "as \"" + vavi.apps.gitup.model.GitRepo.AUTO_STASH_MESSAGE + "\"<br>without asking and pop them afterwards. "
+                + "Off: they need a clean working copy.</font></html>");
+        stashNote.setBorder(BorderFactory.createEmptyBorder(0, 24, 12, 0));
         JPanel p = new JPanel();
         p.setLayout(new javax.swing.BoxLayout(p, javax.swing.BoxLayout.Y_AXIS));
         p.setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
-        for (JComponent c : new JComponent[] {protect, note, list, listNote}) {
+        for (JComponent c : new JComponent[] {protect, note, stash, stashNote, list, listNote}) {
             c.setAlignmentX(0);
             p.add(c);
         }

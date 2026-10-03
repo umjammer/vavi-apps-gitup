@@ -46,6 +46,7 @@ import vavi.apps.gitup.jna.RepoWatcher;
 import vavi.apps.gitup.model.CommitLog;
 import vavi.apps.gitup.model.CommitLog.CommitRow;
 import vavi.apps.gitup.model.FileChange;
+import vavi.apps.gitup.model.GitException;
 import vavi.apps.gitup.model.GitRepo;
 import vavi.apps.gitup.model.GitRepo.IgnoreTarget;
 import vavi.apps.gitup.model.HistorySearch;
@@ -1522,7 +1523,8 @@ public class RepoPanel extends JPanel {
                 showError(new IllegalStateException("finish or abort the merge / rebase in progress first"));
                 return;
             }
-            if (!(Boolean) info[2]) {
+            boolean stash = !(Boolean) info[2];
+            if (stash && !vavi.apps.gitup.model.Settings.get().autoStash()) {
                 showError(new IllegalStateException("commit or stash the local changes before rewriting history"));
                 return;
             }
@@ -1562,7 +1564,7 @@ public class RepoPanel extends JPanel {
                 case MOVE_DOWN -> "Moved down";
                 case DELETE -> "Deleted";
             };
-            exec.submit(() -> {
+            exec.submit(() -> withAutoStash(stash, () -> {
                 String before = repo.headTree();
                 GitRepo.RefSnapshot snapshot = repo.snapshotRefs(switch (r) {
                     case SQUASH -> "Squash";
@@ -1592,15 +1594,44 @@ public class RepoPanel extends JPanel {
                 pushUndo(snapshot);
                 if (!java.util.Objects.equals(before, repo.headTree())) repo.resetHardToHead();
                 return java.util.Optional.ofNullable(result);
-            }, result -> {
-                statusBar.setText(label + " " + c.shortOid() + result.map(x -> " → " + x.substring(0, 7)).orElse(""));
+            }), result -> {
+                statusBar.setText(label + " " + c.shortOid() + result.map(x -> " → " + x.substring(0, 7)).orElse("") + (stash ? " (local changes auto stashed)" : ""));
                 result.ifPresent(x -> {
                     selectedCommit = x;
                     showingWorking = false;
                 });
                 refreshAll(true);
-            });
+            }, stash ? this::showErrorAndRefresh : this::showError);
         });
+    }
+
+    /**
+     * runs a history rewrite on the git thread, with the local changes stashed as {@link GitRepo#AUTO_STASH_MESSAGE}
+     * when {@code stash} (no dialog), they are popped afterwards also when the rewrite fails. when they cannot be
+     * popped (conflicts with the new HEAD) the stash is kept and the error tells so.
+     */
+    private <T> T withAutoStash(boolean stash, java.util.concurrent.Callable<T> body) throws Exception {
+        String oid = stash ? repo.autoStash() : null;
+        if (oid == null) return body.call();
+        T result;
+        try {
+            result = body.call();
+        } catch (Exception e) {
+            try {
+                repo.autoStashPop(oid);
+            } catch (RuntimeException x) {
+                throw new GitException(e.getMessage() + "\n" + x.getMessage());
+            }
+            throw e;
+        }
+        repo.autoStashPop(oid);
+        return result;
+    }
+
+    /** the history may have been rewritten before the error (e.g. the auto stash could not be popped) */
+    private void showErrorAndRefresh(Throwable t) {
+        showError(t);
+        refreshAll(true);
     }
 
     /** how far back "Fixup Into…" offers ancestors */
@@ -1630,7 +1661,8 @@ public class RepoPanel extends JPanel {
                 showError(new IllegalStateException("finish or abort the merge / rebase in progress first"));
                 return;
             }
-            if (!(Boolean) info[1]) {
+            boolean stash = !(Boolean) info[1];
+            if (stash && !vavi.apps.gitup.model.Settings.get().autoStash()) {
                 showError(new IllegalStateException("commit or stash the local changes before rewriting history"));
                 return;
             }
@@ -1663,7 +1695,7 @@ public class RepoPanel extends JPanel {
             CommitRow target = targets.get(between);
             exec.submit(() -> repo.publishedIn(target.oid()), pushed -> {
                 if (!PushedGuard.allow(this, "Fixup", "The commit " + target.shortOid(), pushed)) return;
-                exec.submit(() -> {
+                exec.submit(() -> withAutoStash(stash, () -> {
                     String before = repo.headTree();
                     GitRepo.RefSnapshot snapshot = repo.snapshotRefs("Fixup", false);
                     commandLog.add("git commit --fixup=" + target.shortOid() + "; git rebase -i --autosquash " + target.shortOid() + "^  # fixup "
@@ -1680,12 +1712,13 @@ public class RepoPanel extends JPanel {
                     pushUndo(snapshot);
                     if (!java.util.Objects.equals(before, repo.headTree())) repo.resetHardToHead();
                     return result;
-                }, result -> {
-                    statusBar.setText("Fixed up " + c.shortOid() + " into " + target.shortOid() + " → " + result.substring(0, 7));
+                }), result -> {
+                    statusBar.setText("Fixed up " + c.shortOid() + " into " + target.shortOid() + " → " + result.substring(0, 7)
+                            + (stash ? " (local changes auto stashed)" : ""));
                     selectedCommit = result;
                     showingWorking = false;
                     refreshAll(true);
-                });
+                }, stash ? this::showErrorAndRefresh : this::showError);
             });
         });
     }

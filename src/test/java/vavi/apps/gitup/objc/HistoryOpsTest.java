@@ -255,4 +255,44 @@ class HistoryOpsTest {
         assertEquals(sh("rev-parse", "main~1"), sh("rev-parse", "topic"));
         assertEquals("", sh("status", "--porcelain"));
     }
+
+    /** what the log's rewrites do with Settings#autoStash: stash, rewrite, pop (staged changes stay staged) */
+    @Test
+    void autoStash() throws Exception {
+        threeCommits();
+        Files.writeString(dir.resolve("one.txt"), "one staged\n");
+        sh("add", "one.txt");
+        Files.writeString(dir.resolve("three.txt"), "three unstaged\n");
+        Files.writeString(dir.resolve("new.txt"), "untracked\n");
+        try (GitRepo repo = new GitRepo(dir)) {
+            String stash = repo.autoStash();
+            assertEquals("?? new.txt", sh("status", "--porcelain"), "untracked files stay");
+            assertTrue(repo.stashes().getFirst().message().contains(GitRepo.AUTO_STASH_MESSAGE), repo.stashes().getFirst().message());
+
+            HistoryOps.swapWithChild(dir, sh("rev-parse", "HEAD~1")); // two above three
+            assertEquals("two\nthree\none", sh("log", "--format=%s"));
+
+            repo.autoStashPop(stash);
+            assertTrue(repo.stashes().isEmpty());
+            assertEquals("M  one.txt\n M three.txt\n?? new.txt", sh("status", "--porcelain"));
+            assertEquals("one staged\n", Files.readString(dir.resolve("one.txt")));
+            assertEquals("three unstaged\n", Files.readString(dir.resolve("three.txt")));
+        }
+    }
+
+    /** the local changes conflict with the rewritten HEAD: the stash is kept */
+    @Test
+    void autoStashConflict() throws Exception {
+        threeCommits();
+        Files.writeString(dir.resolve("two.txt"), "two changed\n");
+        try (GitRepo repo = new GitRepo(dir)) {
+            String stash = repo.autoStash();
+            assertEquals("", sh("status", "--porcelain"));
+            HistoryOps.delete(dir, sh("rev-parse", "HEAD~1")); // two.txt is gone
+            repo.resetHardToHead();
+            GitException e = assertThrows(GitException.class, () -> repo.autoStashPop(stash));
+            assertTrue(e.getMessage().contains(GitRepo.AUTO_STASH_MESSAGE), e.getMessage());
+            assertEquals(1, repo.stashes().size(), "kept");
+        }
+    }
 }
