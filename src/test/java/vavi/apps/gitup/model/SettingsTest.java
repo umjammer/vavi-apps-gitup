@@ -79,6 +79,9 @@ class SettingsTest {
         assertFalse(s.ignoreWhitespace());
         s.setIgnoreWhitespace(true);
         assertTrue(new Settings(prefs).ignoreWhitespace());
+        assertTrue(s.wordDiff(), "on by default");
+        s.setWordDiff(false);
+        assertFalse(new Settings(prefs).wordDiff());
         assertEquals("opendiff \"$LOCAL\" \"$REMOTE\"", s.diffCommand());
         s.setDiffTool(ExternalTool.CUSTOM, "mytool $LOCAL $REMOTE");
         assertEquals("mytool $LOCAL $REMOTE", s.diffCommand());
@@ -103,7 +106,7 @@ class SettingsTest {
         assertTrue(s.spellCheck());
         s.setSpellCheck(false);
         assertFalse(new Settings(prefs).spellCheck());
-        assertEquals(15, changes[0]);
+        assertEquals(16, changes[0]);
     }
 
     @Test

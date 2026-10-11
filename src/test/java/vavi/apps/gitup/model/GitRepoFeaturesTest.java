@@ -110,6 +110,26 @@ class GitRepoFeaturesTest {
     }
 
     @Test
+    void pullDialogOptions() throws Exception {
+        Path b = setupClone();
+        pushFromA(1, "one");
+        pushFromA(2, "two");
+        sh(b, "fetch", "-q");
+        try (GitRepo repo = new GitRepo(b)) {
+            assertEquals(List.of("a: two", "a: one"), repo.incomingSummaries("origin/main", 10));
+            // a fast-forward is possible, but a merge commit is wanted, not committed yet
+            assertEquals(PullResult.NOT_COMMITTED, repo.pull("origin/main", false, true, false, "pulled\n"));
+            assertEquals(GitRepo.State.MERGE, repo.state());
+            repo.commit("pulled\n");
+            assertEquals(GitRepo.State.NONE, repo.state());
+            assertTrue(repo.incomingSummaries("origin/main", 10).isEmpty());
+        }
+        assertEquals("one\ntwo\n3\n4\n5\n", Files.readString(b.resolve("f.txt")));
+        assertEquals(3, sh(b, "log", "-1", "--format=%P %H").trim().split(" ").length, "merge commit has 2 parents");
+        assertEquals("pulled", sh(b, "log", "-1", "--format=%s").trim());
+    }
+
+    @Test
     void pullConflictThenCommit() throws Exception {
         Path b = setupClone();
         pushFromA(3, "THREE-A");

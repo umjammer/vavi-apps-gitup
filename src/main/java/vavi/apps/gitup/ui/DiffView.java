@@ -23,7 +23,9 @@ import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.util.ArrayList;
 import java.util.BitSet;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import javax.swing.AbstractAction;
 import javax.swing.JComponent;
 import javax.swing.JMenuItem;
@@ -39,6 +41,7 @@ import vavi.apps.gitup.model.LazyPatch.Hunk;
 import vavi.apps.gitup.model.LazyPatch.Row;
 import vavi.apps.gitup.model.PartialPatchBuilder;
 import vavi.apps.gitup.model.Settings;
+import vavi.apps.gitup.model.WordDiff;
 
 
 /**
@@ -50,6 +53,7 @@ import vavi.apps.gitup.model.Settings;
  * the same as a small one. rows are selectable by hunk (click the header) and
  * by line (click, shift-click, cmd-click, drag). hunk headers have
  * SourceTree-like buttons (stage / unstage / discard, hunk or selected lines).
+ * the changed words of changed lines are highlighted ({@link WordDiff}, for the painted rows only).
  *
  * @author <a href="mailto:umjammer@gmail.com">Naohide Sano</a> (nsano)
  * @version 0.00 2026-09-25 nsano initial version <br>
@@ -154,6 +158,7 @@ public class DiffView extends JComponent implements Scrollable {
         this.mode = mode;
         this.message = patch == null ? message : patch.isBinary() ? "Binary file" : patch.rowCount() == 0 ? "No content changes" : null;
         selection.clear();
+        words.clear();
         anchor = -1;
         maxChars = 80;
         revalidate();
@@ -294,6 +299,8 @@ public class DiffView extends JComponent implements Scrollable {
             case REMOVED -> dark ? new Color(0x4a2127) : new Color(0xffeef0);
             case ADDED_TEXT -> dark ? new Color(0x3fb950) : new Color(0x1a7f37);
             case REMOVED_TEXT -> dark ? new Color(0xf85149) : new Color(0xcf222e);
+            case ADDED_WORD -> dark ? new Color(0x2e6b3f) : new Color(0xacf2bd);
+            case REMOVED_WORD -> dark ? new Color(0x8a2c35) : new Color(0xfdb8c0);
             case HUNK_HEADER -> dark ? new Color(0x2b3445) : new Color(0xf1f8ff);
             case SELECTION -> dark ? new Color(0x3d5a80) : new Color(0xb4d5fe);
         };
@@ -316,6 +323,9 @@ public class DiffView extends JComponent implements Scrollable {
         Color delBg = color(Settings.DiffColor.REMOVED);
         Color addFg = color(Settings.DiffColor.ADDED_TEXT);
         Color delFg = color(Settings.DiffColor.REMOVED_TEXT);
+        Color addWord = color(Settings.DiffColor.ADDED_WORD);
+        Color delWord = color(Settings.DiffColor.REMOVED_WORD);
+        boolean wordDiff = Settings.get().wordDiff();
         Color headBg = color(Settings.DiffColor.HUNK_HEADER);
         Color selBg = color(Settings.DiffColor.SELECTION);
         Color gutterBg = dark ? bg.brighter() : new Color(0xf6f8fa);
@@ -364,6 +374,17 @@ public class DiffView extends JComponent implements Scrollable {
             boolean marker = o == '=' || o == '>' || o == '<';
             String text = marker ? "\\ No newline at end of file" : expandTabs(row.content());
             widest = Math.max(widest, text.length());
+            if (wordDiff && row.isChange() && !selection.get(r)) {
+                int[] words = words(r);
+                if (words != null) {
+                    FontMetrics fm = g.getFontMetrics();
+                    g.setColor(o == '+' ? addWord : delWord);
+                    for (int i = 0; i < words.length; i += 2) {
+                        int x0 = gw + 4 + fm.stringWidth(text.substring(0, words[i]));
+                        g.fillRect(x0, y + 1, fm.stringWidth(text.substring(words[i], words[i + 1])), rowHeight - 2);
+                    }
+                }
+            }
             g.setColor(marker ? dim : o == '+' ? addFg : o == '-' ? delFg : fg);
             if (!marker) g.drawString(String.valueOf(o == ' ' ? ' ' : o), gw - charWidth, y + ascent);
             g.drawString(text, gw + 4, y + ascent);
@@ -371,6 +392,43 @@ public class DiffView extends JComponent implements Scrollable {
         if (widest > maxChars) {
             maxChars = widest;
             SwingUtilities.invokeLater(this::revalidate);
+        }
+    }
+
+    // word diff
+
+    /** row → changed character ranges of the shown (tab expanded) text, empty: none. for the shown patch */
+    private final Map<Integer, int[]> words = new HashMap<>();
+    private static final int[] NO_WORDS = {};
+    /** a block of changed lines longer than this is not word diffed (a rewritten region) */
+    private static final int MAX_WORD_DIFF_BLOCK = 200;
+
+    /** @return {start, end} pairs of the changed words of a changed row, null when none */
+    private int[] words(int r) {
+        int[] w = words.get(r);
+        if (w == null) {
+            wordDiffBlock(r);
+            w = words.get(r);
+        }
+        return w == null || w.length == 0 ? null : w;
+    }
+
+    /** pairs the n-th removed line with the n-th added line of the block of changed rows around r */
+    private void wordDiffBlock(int r) {
+        int hunkStart = patch.hunkRow(patch.hunkOfRow(r));
+        int start = r, end = r;
+        while (start - 1 > hunkStart && r - start < MAX_WORD_DIFF_BLOCK && patch.row(start - 1).isChange()) start--;
+        while (end + 1 < rows() && end - r < MAX_WORD_DIFF_BLOCK && patch.row(end + 1).isChange()) end++;
+        for (int i = start; i <= end; i++) words.put(i, NO_WORDS);
+        if (end - start + 1 > MAX_WORD_DIFF_BLOCK) return;
+        List<Integer> removed = new ArrayList<>(), added = new ArrayList<>();
+        for (int i = start; i <= end; i++) (patch.row(i).origin() == '-' ? removed : added).add(i);
+        for (int i = 0; i < Math.min(removed.size(), added.size()); i++) {
+            int a = removed.get(i), b = added.get(i);
+            WordDiff.Result d = WordDiff.diff(expandTabs(patch.row(a).content()), expandTabs(patch.row(b).content()));
+            if (d == null) continue;
+            words.put(a, d.removed());
+            words.put(b, d.added());
         }
     }
 

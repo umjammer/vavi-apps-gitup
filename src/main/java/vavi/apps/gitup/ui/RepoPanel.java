@@ -408,7 +408,7 @@ public class RepoPanel extends JPanel {
         logPanel.select(null);
         staging.message.requestFocusInWindow();
     });
-    private final Action pullAction = action("Pull", "Fetch, then fast-forward, or merge / rebase (pull.rebase) the upstream", KeyStroke.getKeyStroke(KeyEvent.VK_P, menuMask | shift), () -> pull(null));
+    private final Action pullAction = action("Pull", "Choose a remote branch, fetch, then fast-forward, merge or rebase", KeyStroke.getKeyStroke(KeyEvent.VK_P, menuMask | shift), this::pullDialog);
     private final Action pullRebaseAction = action("Pull with Rebase", "Fetch, then rebase the current branch onto the upstream", null, () -> pull(true));
     private final Action pushAction = action("Push", "Push the current branch", KeyStroke.getKeyStroke(KeyEvent.VK_P, menuMask), this::push);
     private final Action fetchAction = action("Fetch", "Fetch all remotes", KeyStroke.getKeyStroke(KeyEvent.VK_F, menuMask | shift), this::fetch);
@@ -2202,22 +2202,90 @@ public class RepoPanel extends JPanel {
             ops.fetchAll();
             GitRepo.RefSnapshot snapshot = repo.snapshotRefs("Pull", false);
             PullResult r = repo.pullFromUpstream(rebase != null ? rebase : repo.isPullRebaseConfigured());
-            if (r == PullResult.FAST_FORWARD || r == PullResult.MERGED || r == PullResult.REBASED) pushUndo(snapshot);
-            if (r == PullResult.CONFLICTS || r == PullResult.REBASE_CONFLICTS) {
-                boolean rb = r == PullResult.REBASE_CONFLICTS;
-                SwingUtilities.invokeLater(() -> JOptionPane.showMessageDialog(this,
-                        "The " + (rb ? "rebase" : "merge") + " has conflicts.\nResolve them (right click: Resolve Using Mine / Theirs, or edit and stage),\nthen "
-                                + (rb ? "continue the rebase" : "commit") + ", or abort the " + (rb ? "rebase." : "merge."),
-                        "Pull", JOptionPane.WARNING_MESSAGE));
+            return pulled(r, snapshot, null);
+        });
+    }
+
+    /** undo, conflicts, the status message after a pull, on the git thread */
+    private String pulled(PullResult r, GitRepo.RefSnapshot snapshot, String message) {
+        if (r == PullResult.FAST_FORWARD || r == PullResult.MERGED || r == PullResult.REBASED) pushUndo(snapshot);
+        if (r == PullResult.CONFLICTS || r == PullResult.REBASE_CONFLICTS) {
+            boolean rb = r == PullResult.REBASE_CONFLICTS;
+            SwingUtilities.invokeLater(() -> JOptionPane.showMessageDialog(this,
+                    "The " + (rb ? "rebase" : "merge") + " has conflicts.\nResolve them (right click: Resolve Using Mine / Theirs, or edit and stage),\nthen "
+                            + (rb ? "continue the rebase" : "commit") + ", or abort the " + (rb ? "rebase." : "merge."),
+                    "Pull", JOptionPane.WARNING_MESSAGE));
+        }
+        if (r == PullResult.NOT_COMMITTED && message != null) SwingUtilities.invokeLater(() -> staging.message.setText(message.strip()));
+        return switch (r) {
+            case UP_TO_DATE -> "already up to date";
+            case FAST_FORWARD -> "fast-forwarded";
+            case MERGED -> "merged";
+            case NOT_COMMITTED -> "merged, not committed: review and commit";
+            case REBASED -> "rebased";
+            case CONFLICTS -> "merge has conflicts";
+            case REBASE_CONFLICTS -> "rebase stopped by conflicts";
+        };
+    }
+
+    private record PullInfo(List<GitRepo.Remote> remotes, Map<String, List<String>> branches, String current, String upstream, boolean rebase) {}
+
+    /** remote name to its branch names (as of the last fetch) */
+    private Map<String, List<String>> remoteBranches(List<GitRepo.Remote> remotes) {
+        Map<String, List<String>> map = new HashMap<>();
+        List<String> names = repo.refs().stream().filter(r -> r.kind() == Ref.Kind.REMOTE).map(Ref::shorthand).sorted().toList();
+        for (GitRepo.Remote r : remotes) {
+            String prefix = r.name() + "/";
+            map.put(r.name(), names.stream().filter(n -> n.startsWith(prefix)).map(n -> n.substring(prefix.length())).toList());
+        }
+        return map;
+    }
+
+    /** SourceTree-like: asks the remote branch and how to integrate it, then fetches and pulls */
+    private void pullDialog() {
+        exec.submit(() -> {
+            List<GitRepo.Remote> remotes = repo.remotes();
+            String current = repo.headBranch();
+            String upstream = current != null && !"HEAD".equals(current) ? repo.upstream(current) : null;
+            return new PullInfo(remotes, remoteBranches(remotes), current, upstream, repo.isPullRebaseConfigured());
+        }, info -> {
+            if (info.remotes().isEmpty()) {
+                showError(new IllegalStateException("no remote: add one with the sidebar's REMOTES ▸ New Remote…"));
+                return;
             }
-            return switch (r) {
-                case UP_TO_DATE -> "already up to date";
-                case FAST_FORWARD -> "fast-forwarded";
-                case MERGED -> "merged";
-                case REBASED -> "rebased";
-                case CONFLICTS -> "merge has conflicts";
-                case REBASE_CONFLICTS -> "rebase stopped by conflicts";
-            };
+            if (info.current() == null || "HEAD".equals(info.current())) {
+                showError(new IllegalStateException("check out a branch to pull into first"));
+                return;
+            }
+            PullDialog.Refresher refresher = done -> remoteOp("Fetch", ops -> {
+                try {
+                    ops.fetchAll();
+                    return "done";
+                } finally {
+                    Map<String, List<String>> map = remoteBranches(info.remotes());
+                    SwingUtilities.invokeLater(() -> done.accept(map));
+                }
+            });
+            PullDialog.Result r = new PullDialog(this, info.remotes(), info.branches(), info.current(), info.upstream(), info.rebase(), refresher).showDialog();
+            if (r == null) return;
+            remoteOp(r.rebase() ? "Pull (rebase)" : "Pull", ops -> {
+                ops.fetchAll();
+                GitRepo.RefSnapshot snapshot = repo.snapshotRefs("Pull", false);
+                String message = null;
+                if (!r.rebase()) {
+                    message = repo.pullMessage(r.remoteBranch());
+                    if (r.log()) {
+                        List<String> summaries = repo.incomingSummaries(r.remoteBranch(), 20);
+                        if (!summaries.isEmpty()) {
+                            StringBuilder sb = new StringBuilder(message).append("\n* ").append(r.remoteBranch()).append(":\n");
+                            summaries.forEach(m -> sb.append("  ").append(m).append("\n"));
+                            message = sb.toString();
+                        }
+                    }
+                }
+                PullResult result = repo.pull(r.remoteBranch(), r.rebase(), r.noFastForward(), r.commit(), message);
+                return pulled(result, snapshot, message) + " (" + r.remoteBranch() + ")";
+            });
         });
     }
 

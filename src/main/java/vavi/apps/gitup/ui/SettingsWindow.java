@@ -537,6 +537,8 @@ public class SettingsWindow extends JFrame {
                 case REMOVED -> "Removed lines (background):";
                 case ADDED_TEXT -> "Added lines (text):";
                 case REMOVED_TEXT -> "Removed lines (text):";
+                case ADDED_WORD -> "Added words (word diff):";
+                case REMOVED_WORD -> "Removed words (word diff):";
                 case HUNK_HEADER -> "Hunk headers:";
                 case SELECTION -> "Selected lines:";
             }), c);
@@ -577,6 +579,9 @@ public class SettingsWindow extends JFrame {
         JPanel general = new JPanel(new FlowLayout(FlowLayout.LEFT));
         general.add(new JLabel("Lines of context:"));
         general.add(context);
+        javax.swing.JCheckBox wordDiff = new javax.swing.JCheckBox("Highlight changed words (word diff)", settings.wordDiff());
+        wordDiff.addActionListener(e -> settings.setWordDiff(wordDiff.isSelected()));
+        general.add(wordDiff);
 
         JPanel tools = new JPanel(new GridBagLayout());
         tools.setBorder(BorderFactory.createTitledBorder("External Diff / Merge"));

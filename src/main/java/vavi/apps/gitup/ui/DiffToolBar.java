@@ -16,6 +16,7 @@ import javax.swing.BorderFactory;
 import javax.swing.ButtonGroup;
 import javax.swing.Icon;
 import javax.swing.JButton;
+import javax.swing.JCheckBoxMenuItem;
 import javax.swing.JLabel;
 import javax.swing.JMenu;
 import javax.swing.JPanel;
@@ -30,7 +31,7 @@ import vavi.apps.gitup.model.Settings;
 
 /**
  * SourceTree-like bar above the hunk diff: the file shown (with the status icon of the
- * file lists) on the left, a menu of the diff options (whitespace, lines of context) on the right.
+ * file lists) on the left, a menu of the diff options (whitespace, lines of context, word diff) on the right.
  * the options are {@link Settings}, their listeners reopen the shown diff.
  *
  * @author <a href="mailto:umjammer@gmail.com">Naohide Sano</a> (nsano)
@@ -88,6 +89,11 @@ public class DiffToolBar extends JPanel {
             radio(context, lines, String.valueOf(n), s.contextLines() == n, () -> s.setContextLines(n));
         }
         menu.add(context);
+        menu.addSeparator();
+        JCheckBoxMenuItem word = new JCheckBoxMenuItem("Word Diff", s.wordDiff());
+        word.setToolTipText("highlight the changed words of changed lines");
+        word.addActionListener(e -> s.setWordDiff(word.isSelected()));
+        menu.add(word);
         return menu;
     }
 
