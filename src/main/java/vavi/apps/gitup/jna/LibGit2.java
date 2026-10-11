@@ -389,6 +389,8 @@ public interface LibGit2 extends Library {
     int git_revwalk_new(PointerByReference out, Pointer repo);
     int git_revwalk_sorting(Pointer walk, int mode);
     int git_revwalk_push_head(Pointer walk);
+    int git_revwalk_push(Pointer walk, GitOid id);
+    int git_revwalk_hide(Pointer walk, GitOid id);
     int git_revwalk_push_glob(Pointer walk, String glob);
     int git_revwalk_next(GitOid out, Pointer walk);
     void git_revwalk_free(Pointer walk);

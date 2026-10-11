@@ -1153,7 +1153,7 @@ public class GitRepo implements AutoCloseable {
     }
 
     /** result of {@link #pullFromUpstream()} */
-    public enum PullResult { UP_TO_DATE, FAST_FORWARD, MERGED, CONFLICTS, REBASED, REBASE_CONFLICTS }
+    public enum PullResult { UP_TO_DATE, FAST_FORWARD, MERGED, NOT_COMMITTED, CONFLICTS, REBASED, REBASE_CONFLICTS }
 
     /** @return true when branch.&lt;name&gt;.rebase or pull.rebase is set */
     public boolean isPullRebaseConfigured() {
@@ -1184,9 +1184,66 @@ public class GitRepo implements AutoCloseable {
         if (branch == null || "HEAD".equals(branch)) throw new GitException("not on a branch");
         String upstream = upstream(branch);
         if (upstream == null) throw new GitException("no upstream for " + branch);
-        cmd((rebase ? "git rebase " : "git merge ") + q(upstream), "pull after the fetch");
+        return pull(upstream, rebase, false, true, null);
+    }
+
+    /** @return the default message of a merge of the remote branch into the current branch */
+    public String pullMessage(String remoteBranch) {
+        return "Merge remote-tracking branch '" + remoteBranch + "' into " + headBranch() + "\n";
+    }
+
+    /**
+     * the summaries of the commits of the remote branch that the current branch does not have yet
+     * (git merge --log), newest first.
+     *
+     * @param max at most this many
+     */
+    public List<String> incomingSummaries(String remoteBranch, int max) {
+        List<String> list = new ArrayList<>();
+        if (isHeadUnborn()) return list;
+        GitOid theirs = new GitOid(), ours = new GitOid();
+        git.git_oid_fromstr(theirs, revparse("refs/remotes/" + remoteBranch));
+        git.git_oid_fromstr(ours, revparse("HEAD"));
+        PointerByReference wp = new PointerByReference();
+        check(git.git_revwalk_new(wp, handle()), "revwalk");
+        Pointer walk = wp.getValue();
+        try {
+            git.git_revwalk_sorting(walk, GIT_SORT_TOPOLOGICAL | GIT_SORT_TIME);
+            check(git.git_revwalk_push(walk, theirs), "revwalk push");
+            check(git.git_revwalk_hide(walk, ours), "revwalk hide");
+            GitOid id = new GitOid();
+            while (list.size() < max && git.git_revwalk_next(id, walk) == 0) {
+                Pointer c = lookupCommit(id.hex());
+                try {
+                    list.add(git.git_commit_summary(c));
+                } finally {
+                    git.git_commit_free(c);
+                }
+            }
+        } finally {
+            git.git_revwalk_free(walk);
+        }
+        return list;
+    }
+
+    /**
+     * integrates a fetched remote branch into the current branch (SourceTree's "Pull" dialog).
+     *
+     * @param remoteBranch  "remote/branch"
+     * @param rebase        rebase the current branch onto it instead of merging
+     * @param noFastForward merge: create a merge commit even when a fast-forward is possible
+     * @param commit        merge: commit immediately (otherwise it is left merging, like --no-commit)
+     * @param message       merge: the commit message, null for the default
+     */
+    public PullResult pull(String remoteBranch, boolean rebase, boolean noFastForward, boolean commit, String message) {
+        String branch = headBranch();
+        if (branch == null || "HEAD".equals(branch)) throw new GitException("not on a branch");
+        if (message == null) message = pullMessage(remoteBranch);
+        cmd(rebase ? "git rebase " + q(remoteBranch)
+                : "git merge" + (noFastForward ? " --no-ff" : "") + (commit ? "" : " --no-commit") + " -m " + CommandLog.message(message) + " " + q(remoteBranch),
+                "pull after the fetch");
         if (state() != State.NONE) throw new GitException("finish or abort the merge in progress first");
-        String target = revparse("refs/remotes/" + upstream);
+        String target = revparse("refs/remotes/" + remoteBranch);
         GitOid t = new GitOid();
         git.git_oid_fromstr(t, target);
         PointerByReference ap = new PointerByReference();
@@ -1197,7 +1254,7 @@ public class GitRepo implements AutoCloseable {
             check(git.git_merge_analysis(analysis, preference, handle(), heads, new NativeLong(1)), "merge analysis");
             int a = analysis.getValue();
             if ((a & GIT_MERGE_ANALYSIS_UP_TO_DATE) != 0) return PullResult.UP_TO_DATE;
-            if ((a & GIT_MERGE_ANALYSIS_FASTFORWARD) != 0) {
+            if ((a & GIT_MERGE_ANALYSIS_FASTFORWARD) != 0 && (rebase || !noFastForward)) {
                 fastForward(branch, target, t);
                 return PullResult.FAST_FORWARD;
             }
@@ -1210,14 +1267,9 @@ public class GitRepo implements AutoCloseable {
         } finally {
             git.git_annotated_commit_free(ap.getValue());
         }
-        Pointer index = index();
-        try {
-            check(git.git_index_read(index, 1), "read index");
-            if (git.git_index_has_conflicts(index) == 1) return PullResult.CONFLICTS;
-        } finally {
-            git.git_index_free(index);
-        }
-        commit0("Merge remote-tracking branch '" + upstream + "' into " + branch + "\n");
+        if (!conflictedPaths().isEmpty()) return PullResult.CONFLICTS;
+        if (!commit) return PullResult.NOT_COMMITTED;
+        commit0(message);
         return PullResult.MERGED;
     }
 

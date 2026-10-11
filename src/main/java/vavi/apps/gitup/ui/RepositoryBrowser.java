@@ -163,10 +163,18 @@ public class RepositoryBrowser extends JFrame {
         });
     }
 
-    // ahead / behind
+    // ahead / behind, uncommitted
 
-    /** repository → ahead / behind against the upstream (empty: none), missing until computed */
-    private final java.util.Map<Path, java.util.Optional<vavi.apps.gitup.model.GitRepo.AheadBehind>> status = new java.util.concurrent.ConcurrentHashMap<>();
+    /**
+     * @param ab          against the upstream, null when none
+     * @param uncommitted files with changes in the index or the working directory (untracked ones too)
+     */
+    record RepoStatus(vavi.apps.gitup.model.GitRepo.AheadBehind ab, int uncommitted) {
+        static final RepoStatus NONE = new RepoStatus(null, 0);
+    }
+
+    /** repository → ahead / behind against the upstream and the uncommitted files, missing until computed */
+    private final java.util.Map<Path, RepoStatus> status = new java.util.concurrent.ConcurrentHashMap<>();
     /** recomputed when the window is activated after this (ms) */
     private static final long STATUS_INTERVAL = 30_000;
     private volatile long statusTime;
@@ -220,18 +228,28 @@ public class RepositoryBrowser extends JFrame {
         statusExecutor.execute(() -> {
             for (Path p : repos) updateHead(p); // cheap, shown before the slower ahead / behind
             for (Path p : repos) {
-                java.util.Optional<vavi.apps.gitup.model.GitRepo.AheadBehind> ab = aheadBehind(p);
-                if (!ab.equals(status.put(p, ab))) javax.swing.SwingUtilities.invokeLater(() -> repoChanged(p));
+                RepoStatus st = statusOf(p);
+                if (!st.equals(status.put(p, st))) javax.swing.SwingUtilities.invokeLater(() -> repoChanged(p));
             }
         });
     }
 
-    private static java.util.Optional<vavi.apps.gitup.model.GitRepo.AheadBehind> aheadBehind(Path p) {
-        if (!Files.isDirectory(p.resolve(".git"))) return java.util.Optional.empty();
+    private static RepoStatus statusOf(Path p) {
+        if (!Files.isDirectory(p.resolve(".git"))) return RepoStatus.NONE;
         try (vavi.apps.gitup.model.GitRepo repo = new vavi.apps.gitup.model.GitRepo(p)) {
-            return java.util.Optional.ofNullable(repo.aheadBehind());
+            vavi.apps.gitup.model.GitRepo.Status st = repo.status();
+            java.util.Set<String> paths = new java.util.HashSet<>();
+            st.staged().forEach(f -> paths.add(f.path()));
+            st.unstaged().forEach(f -> paths.add(f.path()));
+            vavi.apps.gitup.model.GitRepo.AheadBehind ab = null;
+            try {
+                ab = repo.aheadBehind();
+            } catch (RuntimeException e) {
+                // no upstream to compare with, the uncommitted count is still shown
+            }
+            return new RepoStatus(ab, paths.size());
         } catch (RuntimeException e) {
-            return java.util.Optional.empty();
+            return RepoStatus.NONE;
         }
     }
 
@@ -416,7 +434,7 @@ public class RepositoryBrowser extends JFrame {
         menu.add(importSt);
         menu.addSeparator();
         JMenuItem refresh = new JMenuItem("Refresh Status");
-        refresh.setToolTipText("ahead / behind of each repository against its upstream (as of the last fetch)");
+        refresh.setToolTipText("ahead / behind of each repository against its upstream (as of the last fetch), uncommitted files");
         refresh.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_R, Keys.menu()));
         refresh.addActionListener(e -> refreshStatus());
         menu.add(refresh);
@@ -585,11 +603,11 @@ public class RepositoryBrowser extends JFrame {
      * out an html view per row made every rebuild (each keystroke in the search field) slow.
      */
     private static class Renderer extends DefaultTreeCellRenderer {
-        private final java.util.Map<Path, java.util.Optional<vavi.apps.gitup.model.GitRepo.AheadBehind>> status;
+        private final java.util.Map<Path, RepoStatus> status;
         private final java.util.Map<Path, Head> heads;
         private final RepoCell repoCell = new RepoCell();
 
-        Renderer(java.util.Map<Path, java.util.Optional<vavi.apps.gitup.model.GitRepo.AheadBehind>> status, java.util.Map<Path, Head> heads) {
+        Renderer(java.util.Map<Path, RepoStatus> status, java.util.Map<Path, Head> heads) {
             this.status = status;
             this.heads = heads;
         }
@@ -599,9 +617,10 @@ public class RepositoryBrowser extends JFrame {
             Object o = ((DefaultMutableTreeNode) v).getUserObject();
             if (o instanceof Repo r) {
                 Head head = heads.getOrDefault(r.path(), new Head(true, null)); // not read yet
-                vavi.apps.gitup.model.GitRepo.AheadBehind ab = status.getOrDefault(r.path(), java.util.Optional.empty()).orElse(null);
+                RepoStatus st = status.getOrDefault(r.path(), RepoStatus.NONE);
+                vavi.apps.gitup.model.GitRepo.AheadBehind ab = st.ab();
                 if (ab != null && !ab.branch().equals(head.branch())) ab = null; // checked out another branch since
-                repoCell.set(t, r, head, ab, sel ? getTextSelectionColor() : getTextNonSelectionColor());
+                repoCell.set(t, r, head, ab, st.uncommitted(), sel ? getTextSelectionColor() : getTextNonSelectionColor());
                 return repoCell;
             }
             super.getTreeCellRendererComponent(t, v, sel, exp, leaf, row, focus);
@@ -613,20 +632,21 @@ public class RepositoryBrowser extends JFrame {
         }
     }
 
-    /** a repository row: icon, bold name, branch, ahead / behind, and the path below in small gray */
+    /** a repository row: icon, bold name, branch, ahead / behind, uncommitted, and the path below in small gray */
     private static class RepoCell extends JComponent {
         private static final java.awt.Color BRANCH = new java.awt.Color(0x0969da);
         private static final java.awt.Color AHEAD = new java.awt.Color(0x1a7f37);
         private static final java.awt.Color BEHIND = new java.awt.Color(0xbc4c00);
+        private static final java.awt.Color UNCOMMITTED = new java.awt.Color(0x8250df);
         private static final int PAD = 4, GAP = 4, SPACE = 8;
 
         private final javax.swing.Icon icon = IconProvider.tinted(IconProvider.get().icon(IconProvider.Key.REPOSITORY, 16), IconProvider.LIGHT_BLUE);
         private java.awt.Font plain, bold, small;
-        private String name, branch, ahead, behind, path;
+        private String name, branch, ahead, behind, uncommitted, path;
         private java.awt.Color foreground;
         private String toolTip;
 
-        void set(JTree t, Repo r, Head head, vavi.apps.gitup.model.GitRepo.AheadBehind ab, java.awt.Color fg) {
+        void set(JTree t, Repo r, Head head, vavi.apps.gitup.model.GitRepo.AheadBehind ab, int changes, java.awt.Color fg) {
             if (plain != t.getFont()) {
                 plain = t.getFont();
                 bold = plain.deriveFont(java.awt.Font.BOLD);
@@ -636,10 +656,14 @@ public class RepositoryBrowser extends JFrame {
             branch = head.branch();
             ahead = ab != null && ab.ahead() > 0 ? "↑ " + ab.ahead() : null;
             behind = ab != null && ab.behind() > 0 ? "↓ " + ab.behind() : null;
+            uncommitted = changes > 0 ? "✎ " + changes : null;
             path = r.path() + (head.exists() ? "" : " (missing)");
             foreground = fg;
-            toolTip = ab == null ? r.path().toString() : "<html>" + esc(r.path().toString()) + "<br>" + esc(ab.branch()) + ": "
-                    + ab.ahead() + " ahead, " + ab.behind() + " behind " + esc(ab.upstream()) + " (as of the last fetch)</html>";
+            StringBuilder tip = new StringBuilder(esc(r.path().toString()));
+            if (ab != null) tip.append("<br>").append(esc(ab.branch())).append(": ").append(ab.ahead()).append(" ahead, ")
+                    .append(ab.behind()).append(" behind ").append(esc(ab.upstream())).append(" (as of the last fetch)");
+            if (changes > 0) tip.append("<br>").append(changes).append(" uncommitted file").append(changes == 1 ? "" : "s");
+            toolTip = ab == null && changes == 0 ? r.path().toString() : "<html>" + tip + "</html>";
         }
 
         /** asked by JTree.getToolTipText(), without registering every cell to the ToolTipManager */
@@ -657,6 +681,7 @@ public class RepositoryBrowser extends JFrame {
             if (branch != null) w += SPACE + fp.stringWidth(branch);
             if (ahead != null) w += SPACE + fp.stringWidth(ahead);
             if (behind != null) w += SPACE + fp.stringWidth(behind);
+            if (uncommitted != null) w += SPACE + fp.stringWidth(uncommitted);
             w = Math.max(w, fs.stringWidth(path));
             int h = Math.max(fb.getHeight(), fp.getHeight()) + fs.getHeight();
             return new java.awt.Dimension(2 + icon.getIconWidth() + GAP + w + 2, Math.max(h, icon.getIconHeight()) + PAD * 2);
@@ -677,7 +702,8 @@ public class RepositoryBrowser extends JFrame {
                 g2.setFont(plain);
                 x = draw(g2, fp, branch, BRANCH, x, y);
                 x = draw(g2, fp, ahead, AHEAD, x, y);
-                draw(g2, fp, behind, BEHIND, x, y);
+                x = draw(g2, fp, behind, BEHIND, x, y);
+                draw(g2, fp, uncommitted, UNCOMMITTED, x, y);
                 g2.setFont(small);
                 g2.setColor(java.awt.Color.gray);
                 javax.swing.plaf.basic.BasicGraphicsUtils.drawString(this, g2, path, 2 + icon.getIconWidth() + GAP, PAD + line1 + fs.getAscent());

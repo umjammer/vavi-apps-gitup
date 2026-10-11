@@ -20,8 +20,11 @@ import java.util.prefs.Preferences;
  */
 public final class Settings {
 
-    /** the colors of the diff view, null means the theme's default. ADDED / REMOVED are backgrounds, *_TEXT the text */
-    public enum DiffColor { ADDED, REMOVED, ADDED_TEXT, REMOVED_TEXT, HUNK_HEADER, SELECTION }
+    /**
+     * the colors of the diff view, null means the theme's default. ADDED / REMOVED are backgrounds, *_TEXT the text,
+     * *_WORD the backgrounds of the changed words (word diff)
+     */
+    public enum DiffColor { ADDED, REMOVED, ADDED_TEXT, REMOVED_TEXT, ADDED_WORD, REMOVED_WORD, HUNK_HEADER, SELECTION }
 
     public static final int DEFAULT_CONTEXT_LINES = 3;
 
@@ -93,6 +96,16 @@ public final class Settings {
 
     public void setIgnoreWhitespace(boolean b) {
         prefs.putBoolean("diff.ignoreWhitespace", b);
+        changed();
+    }
+
+    /** true (default): the changed words of a changed line are highlighted (git diff --word-diff) */
+    public boolean wordDiff() {
+        return prefs.getBoolean("diff.wordDiff", true);
+    }
+
+    public void setWordDiff(boolean b) {
+        prefs.putBoolean("diff.wordDiff", b);
         changed();
     }
 
