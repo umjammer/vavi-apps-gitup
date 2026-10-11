@@ -67,6 +67,9 @@ $ mvn exec:exec -Drepo=/path/to/repository
  - ~~hook presets from the web (awesome-git-hooks)~~
  - ~~add `-` for each top of lines when "copy summary" ... option~~
  - ~~as for commit log, manipulation menus that needs "there is no uncommited files" like "move up/down", "fixup ..." etc., make those stash/pop automatically (don't ask by dialog when stashing, use special name)~~
+ - ~~pull dialog~~
+ - ~~repo browser uncommited files~~
+ - ~~word-diff color~~
 
 ---
 
