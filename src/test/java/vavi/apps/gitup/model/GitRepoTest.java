@@ -352,4 +352,18 @@ class GitRepoTest {
             assertTrue(p.fetchCount() <= 50, "only visible rows fetched: " + p.fetchCount());
         }
     }
+
+    /** libgit2 drops the rules after a NUL in .gitignore, the git command does not */
+    @Test
+    void ignoredByGitAfterNul() throws Exception {
+        write(".gitignore", "Icon\0\0\n/tmp/\n");
+        Files.createDirectories(dir.resolve("tmp"));
+        write("tmp/x.txt", "x\n");
+        write("y.txt", "y\n");
+        List<String> untracked = repo.status().unstaged().stream()
+                .filter(f -> f.kind() == FileChange.Kind.UNTRACKED).map(FileChange::path).toList();
+        assertTrue(untracked.contains("y.txt"));
+        assertEquals(java.util.Set.of("tmp/x.txt"), repo.ignoredByGit(List.of("tmp/x.txt", "y.txt")));
+        assertEquals(java.util.Set.of(), repo.ignoredByGit(List.of("y.txt")));
+    }
 }

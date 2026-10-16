@@ -241,6 +241,9 @@ public class RepositoryBrowser extends JFrame {
             java.util.Set<String> paths = new java.util.HashSet<>();
             st.staged().forEach(f -> paths.add(f.path()));
             st.unstaged().forEach(f -> paths.add(f.path()));
+            // untracked ones libgit2 failed to ignore
+            paths.removeAll(repo.ignoredByGit(st.unstaged().stream()
+                    .filter(f -> f.kind() == vavi.apps.gitup.model.FileChange.Kind.UNTRACKED).map(vavi.apps.gitup.model.FileChange::path).toList()));
             vavi.apps.gitup.model.GitRepo.AheadBehind ab = null;
             try {
                 ab = repo.aheadBehind();
