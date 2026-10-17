@@ -6,6 +6,8 @@
 * window size / position, split panes and log columns, the repository browser (shown or not, size, position) are remembered
 * repository browser (⌘B): bookmarks in nested groups, search, drag to regroup, drop folders from the Finder,
   import SourceTree's bookmarks (Repository Browser menu), expanded / collapsed groups are remembered,
+  F2 (or "Rename…" on right click) edits the display name of a group or a repository in place (blank resets a repository
+  to its folder name),
   ahead ↑ / behind ↓ counts of the current branch against its upstream (as of the last fetch, recomputed when the window
   is activated or with ⌘R)
 * move a folder with its history between repositories: select two repositories in the repository browser (⌘ click),

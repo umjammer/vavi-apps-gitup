@@ -135,4 +135,8 @@ public final class WindowState {
     public static void putString(String key, String value) {
         prefs.put(key, value);
     }
+
+    public static void remove(String key) {
+        prefs.remove(key);
+    }
 }

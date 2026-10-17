@@ -70,6 +70,7 @@ $ mvn exec:exec -Drepo=/path/to/repository
  - ~~pull dialog~~
  - ~~repo browser uncommited files~~
  - ~~word-diff color~~
+ - mcp server
 
 ---
 

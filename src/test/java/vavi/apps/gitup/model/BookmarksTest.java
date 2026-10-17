@@ -66,6 +66,40 @@ class BookmarksTest {
     }
 
     @Test
+    void rename() {
+        Bookmarks b = new Bookmarks();
+        Group work = new Group("work");
+        Repo app = new Repo("app", Path.of("/src/app"));
+        work.children().add(app);
+        b.root().children().add(work);
+
+        Repo renamed = (Repo) b.rename(app, " My\tApp ");
+        assertEquals("My App", renamed.name());
+        assertEquals(renamed, work.children().getFirst());
+        assertEquals("app", b.rename(renamed, " ").name()); // blank: the folder name
+
+        assertEquals("job", b.rename(work, "job").name());
+        assertEquals("job", b.rename(work, "").name()); // blank: kept
+    }
+
+    @Test
+    void collapsed() throws Exception {
+        Bookmarks b = new Bookmarks();
+        Group work = new Group("work");
+        Group sub = new Group("sub");
+        sub.setCollapsed(true);
+        work.children().add(sub);
+        b.root().children().add(work);
+        Path file = dir.resolve("bookmarks.txt");
+        b.save(file);
+        assertEquals("G\twork\n\tG\tsub\tcollapsed\n", Files.readString(file));
+
+        Group w = (Group) Bookmarks.load(file).root().children().getFirst();
+        assertFalse(w.isCollapsed());
+        assertTrue(((Group) w.children().getFirst()).isCollapsed());
+    }
+
+    @Test
     void missingFile() {
         assertEquals(0, Bookmarks.load(dir.resolve("none.txt")).root().children().size());
     }

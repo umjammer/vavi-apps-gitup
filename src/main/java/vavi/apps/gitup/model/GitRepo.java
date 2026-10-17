@@ -1786,6 +1786,37 @@ public class GitRepo implements AutoCloseable {
         return r.getValue() == 1;
     }
 
+    /**
+     * asks the git command which of the paths are ignored. libgit2 stops reading an ignore file at a NUL
+     * (e.g. "Icon\0\0" written for "Icon\r\r"), so the rules after it are lost and {@link #isIgnored} misses them.
+     *
+     * @return the ignored ones of the paths, none when git cannot be run
+     */
+    public java.util.Set<String> ignoredByGit(Collection<String> paths) {
+        if (paths.isEmpty()) return java.util.Set.of();
+        try {
+            Process p = new ProcessBuilder(SubtreeMove.Git.EXECUTABLE, "check-ignore", "--no-index", "--stdin", "-z")
+                    .directory(workdir.toFile()).redirectError(ProcessBuilder.Redirect.DISCARD).start();
+            Thread.ofVirtual().start(() -> { // a full pipe would block the process
+                try (var out = p.getOutputStream()) {
+                    for (String path : paths) out.write((path + "\0").getBytes(StandardCharsets.UTF_8));
+                } catch (IOException e) {
+                    // git quit early
+                }
+            });
+            String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+            if (p.waitFor() > 1) return java.util.Set.of(); // 0: some ignored, 1: none
+            java.util.Set<String> ignored = new java.util.HashSet<>();
+            for (String s : out.split("\0")) if (!s.isEmpty()) ignored.add(s);
+            return ignored;
+        } catch (IOException e) {
+            return java.util.Set.of();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return java.util.Set.of();
+        }
+    }
+
     /** @return the file the target stands for */
     public Path ignoreFile(IgnoreTarget target) {
         return switch (target) {
