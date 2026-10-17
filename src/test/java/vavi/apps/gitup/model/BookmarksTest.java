@@ -66,6 +66,23 @@ class BookmarksTest {
     }
 
     @Test
+    void rename() {
+        Bookmarks b = new Bookmarks();
+        Group work = new Group("work");
+        Repo app = new Repo("app", Path.of("/src/app"));
+        work.children().add(app);
+        b.root().children().add(work);
+
+        Repo renamed = (Repo) b.rename(app, " My\tApp ");
+        assertEquals("My App", renamed.name());
+        assertEquals(renamed, work.children().getFirst());
+        assertEquals("app", b.rename(renamed, " ").name()); // blank: the folder name
+
+        assertEquals("job", b.rename(work, "job").name());
+        assertEquals("job", b.rename(work, "").name()); // blank: kept
+    }
+
+    @Test
     void missingFile() {
         assertEquals(0, Bookmarks.load(dir.resolve("none.txt")).root().children().size());
     }

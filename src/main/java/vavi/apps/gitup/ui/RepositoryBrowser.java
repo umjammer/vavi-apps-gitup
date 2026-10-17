@@ -60,7 +60,8 @@ import vavi.apps.gitup.ui.icons.IconProvider;
  * SourceTree-like repository browser: bookmarked repositories in groups.
  * <p>
  * double click (or return) opens a repository in a tab, drag entries onto a group
- * to move them, drop folders from the Finder to add them, F2 renames a group.
+ * to move them, drop folders from the Finder to add them, F2 edits the display name of a
+ * group or a repository in place (a blank name resets a repository to its folder name).
  *
  * @author <a href="mailto:umjammer@gmail.com">Naohide Sano</a> (nsano)
  * @version 0.00 2026-09-25 nsano initial version <br>
@@ -72,7 +73,12 @@ public class RepositoryBrowser extends JFrame {
     private final Consumer<Path> opener;
 
     private final DefaultMutableTreeNode rootNode = new DefaultMutableTreeNode();
-    private final DefaultTreeModel model = new DefaultTreeModel(rootNode);
+    private final DefaultTreeModel model = new DefaultTreeModel(rootNode) {
+        /** the in place editor committed a display name */
+        @Override public void valueForPathChanged(TreePath path, Object value) {
+            renamed(path, String.valueOf(value));
+        }
+    };
     private final JTree tree = new JTree(model);
     private final JTextField search = new JTextField();
     /** filters after a pause in typing, not on every keystroke */
@@ -89,7 +95,11 @@ public class RepositoryBrowser extends JFrame {
         tree.setRootVisible(false);
         tree.setShowsRootHandles(true);
         tree.setRowHeight(0); // variable, repositories show two lines
-        tree.setCellRenderer(new Renderer(status, heads));
+        Renderer renderer = new Renderer(status, heads);
+        tree.setCellRenderer(renderer);
+        tree.setEditable(true);
+        tree.setInvokesStopCellEditing(true); // focus lost commits as macOS does
+        tree.setCellEditor(new Editor(tree, renderer));
         ToolTipManager.sharedInstance().registerComponent(tree);
         tree.addTreeExpansionListener(new javax.swing.event.TreeExpansionListener() {
             @Override public void treeExpanded(javax.swing.event.TreeExpansionEvent e) { expansionChanged(e.getPath(), true); }
@@ -114,7 +124,7 @@ public class RepositoryBrowser extends JFrame {
         tree.getInputMap(JComponent.WHEN_FOCUSED).put(KeyStroke.getKeyStroke(KeyEvent.VK_F2, 0), "rename");
         tree.getActionMap().put("rename", new AbstractAction() {
             @Override public void actionPerformed(java.awt.event.ActionEvent e) {
-                if (selectedEntry() instanceof Group g) rename(g);
+                rename();
             }
         });
         tree.getInputMap(JComponent.WHEN_FOCUSED).put(KeyStroke.getKeyStroke(KeyEvent.VK_BACK_SPACE, Keys.menu()), "remove");
@@ -526,12 +536,52 @@ public class RepositoryBrowser extends JFrame {
         rebuild();
     }
 
-    private void rename(Group g) {
-        String name = (String) JOptionPane.showInputDialog(this, "Group name:", "Rename Group", JOptionPane.PLAIN_MESSAGE, null, null, g.name());
-        if (name == null || name.isBlank()) return;
-        g.setName(name.strip());
+    /** starts editing the display name of the selected entry in place */
+    private void rename() {
+        TreePath p = tree.getSelectionPath();
+        if (p == null || tree.getSelectionCount() != 1) return;
+        tree.scrollPathToVisible(p);
+        tree.startEditingAtPath(p);
+    }
+
+    /** the display name was edited in place */
+    private void renamed(TreePath path, String name) {
+        Entry e = (Entry) ((DefaultMutableTreeNode) path.getLastPathComponent()).getUserObject();
+        if (name.strip().equals(e.name())) return;
+        String oldKey = e instanceof Group ? groupKey(path) : null;
+        Entry renamed = bookmarks.rename(e, name);
+        if (renamed == null) return;
+        if (oldKey != null) renameCollapsed(oldKey, groupKey(path)); // the group object is kept, the path shows the new name
         save();
-        rebuild();
+        rebuildLater(); // called while the editor is being removed
+        javax.swing.SwingUtilities.invokeLater(() -> select(renamed));
+    }
+
+    /** keeps the saved collapsed state of a renamed group and the groups below it */
+    private void renameCollapsed(String oldKey, String newKey) {
+        if (oldKey.equals(newKey)) return;
+        java.util.Set<String> moved = new java.util.HashSet<>();
+        collapsed.removeIf(k -> {
+            if (k.equals(oldKey)) moved.add(newKey);
+            else if (k.startsWith(oldKey + "/")) moved.add(newKey + k.substring(oldKey.length()));
+            else return false;
+            return true;
+        });
+        collapsed.addAll(moved);
+        WindowState.putString(COLLAPSED, String.join("\n", collapsed));
+    }
+
+    private void select(Entry entry) {
+        java.util.Enumeration<javax.swing.tree.TreeNode> e = rootNode.depthFirstEnumeration();
+        while (e.hasMoreElements()) {
+            DefaultMutableTreeNode n = (DefaultMutableTreeNode) e.nextElement();
+            if (n.getUserObject() == entry) {
+                TreePath p = new TreePath(n.getPath());
+                tree.setSelectionPath(p);
+                tree.scrollPathToVisible(p);
+                return;
+            }
+        }
     }
 
     private void removeSelected() {
@@ -568,8 +618,8 @@ public class RepositoryBrowser extends JFrame {
             item(menu, "Copy Path", () -> LogPanel.copy(r.path().toString()));
             menu.addSeparator();
         }
-        if (entry instanceof Group g) {
-            item(menu, "Rename Group…", () -> rename(g));
+        if (entry != null) {
+            item(menu, "Rename…", this::rename);
         }
         item(menu, "New Group…", this::newGroup);
         item(menu, "Add Existing Local Repository…", this::addExisting);
@@ -632,6 +682,34 @@ public class RepositoryBrowser extends JFrame {
             setFont(t.getFont().deriveFont(java.awt.Font.BOLD));
             setToolTipText(null);
             return this;
+        }
+    }
+
+    /**
+     * edits the display name in place. started only by F2 or the menu, not by clicks
+     * (a click on the selected row would race with double click to open and with dragging).
+     */
+    private static class Editor extends javax.swing.tree.DefaultTreeCellEditor {
+        Editor(JTree tree, Renderer renderer) {
+            super(tree, renderer);
+        }
+
+        @Override public boolean isCellEditable(java.util.EventObject e) {
+            return e == null; // null: JTree.startEditingAtPath
+        }
+
+        @Override public Component getTreeCellEditorComponent(JTree t, Object v, boolean sel, boolean exp, boolean leaf, int row) {
+            Component c = super.getTreeCellEditorComponent(t, v, sel, exp, leaf, row);
+            if (editingComponent instanceof JTextField f) f.selectAll();
+            return c;
+        }
+
+        /** the icons of the renderer, not the look and feel's default ones */
+        @Override protected void determineOffset(JTree t, Object v, boolean sel, boolean exp, boolean leaf, int row) {
+            Object o = ((DefaultMutableTreeNode) v).getUserObject();
+            editingIcon = IconProvider.tinted(IconProvider.get().icon(o instanceof Group ? IconProvider.Key.FOLDER : IconProvider.Key.REPOSITORY, 16),
+                    IconProvider.LIGHT_BLUE);
+            offset = renderer.getIconTextGap() + editingIcon.getIconWidth();
         }
     }
 
