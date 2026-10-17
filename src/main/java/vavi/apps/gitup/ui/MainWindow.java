@@ -44,6 +44,8 @@ public class MainWindow extends JFrame {
         void tabsChanged(List<Path> paths, int selected);
         /** recent commit messages */
         vavi.apps.gitup.model.MessageHistory messageHistory();
+        /** the repository was moved, renamed or deleted (its tab is closed already) */
+        void repositoryMissing(Path path);
     }
 
     private final JTabbedPane tabs = new JTabbedPane();
@@ -224,6 +226,12 @@ public class MainWindow extends JFrame {
             @Override public void failed(RepoPanel p) {
                 int i = tabs.indexOfComponent(p);
                 if (i >= 0) closeTab(i);
+            }
+            @Override public void missing(RepoPanel p) {
+                int i = tabs.indexOfComponent(p);
+                if (i < 0) return;
+                closeTab(i);
+                app.repositoryMissing(p.getPath());
             }
         });
         tabs.addTab(panel.getRepositoryName(), panel);

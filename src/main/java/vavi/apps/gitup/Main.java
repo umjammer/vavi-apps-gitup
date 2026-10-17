@@ -109,6 +109,10 @@ public class Main implements MainWindow.App {
 
     /** opens the repository in a tab of the main window, bookmarks it */
     private void open(Path path) {
+        if (!Files.isDirectory(path)) {
+            repositoryMissing(path);
+            return;
+        }
         if (window == null || !window.isDisplayable()) {
             window = new MainWindow(this);
             window.addWindowListener(new WindowAdapter() {
@@ -185,6 +189,37 @@ public class Main implements MainWindow.App {
     @Override
     public MessageHistory messageHistory() {
         return messageHistory;
+    }
+
+    /** asks as SourceTree does: locate the moved repository, or remove its bookmark */
+    @Override
+    public void repositoryMissing(Path path) {
+        Window parent = window != null && window.isDisplayable() ? window : browser;
+        Object[] options = {"Locate…", "Remove", "Cancel"};
+        int r = JOptionPane.showOptionDialog(parent,
+                "The repository was not found, it may have been moved, renamed or deleted:\n" + path
+                        + "\n\nLocate it, or remove it from the repository browser?",
+                "Repository Not Found", JOptionPane.DEFAULT_OPTION, JOptionPane.WARNING_MESSAGE, null, options, options[0]);
+        if (r == 0) {
+            Path dir = path.getParent();
+            while (dir != null && !Files.isDirectory(dir)) dir = dir.getParent();
+            JFileChooser chooser = new JFileChooser(dir != null ? dir.toFile() : new File(System.getProperty("user.home")));
+            chooser.setDialogTitle("Locate " + path.getFileName());
+            chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+            if (chooser.showOpenDialog(parent) != JFileChooser.APPROVE_OPTION) return;
+            Path to = chooser.getSelectedFile().toPath().toAbsolutePath().normalize();
+            if (bookmarks.relocate(path, to)) {
+                bookmarks.save(bookmarksFile);
+                if (browser != null) browser.reload();
+            }
+            open(to);
+        } else if (r == 1) {
+            Bookmarks.Repo repo = bookmarks.find(path);
+            if (repo != null && bookmarks.remove(repo)) {
+                bookmarks.save(bookmarksFile);
+                if (browser != null) browser.reload();
+            }
+        }
     }
 
     /** quits when neither the main window nor the browser is shown */

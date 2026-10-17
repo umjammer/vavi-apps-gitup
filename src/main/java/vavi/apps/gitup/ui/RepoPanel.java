@@ -92,6 +92,8 @@ public class RepoPanel extends JPanel {
         void titleChanged(RepoPanel panel);
         /** the repository could not be opened */
         void failed(RepoPanel panel);
+        /** the repository directory was moved, renamed or deleted, told once */
+        void missing(RepoPanel panel);
         /** recent commit messages, shared by the tabs */
         MessageHistory messageHistory();
     }
@@ -170,9 +172,33 @@ public class RepoPanel extends JPanel {
             hooksPanel.setHooks(new vavi.apps.gitup.model.GitHooks(workdir != null ? workdir : r.gitDir(), r.gitDir()));
             refreshAll(true);
         }, e -> {
+            if (checkMissing()) return;
             showError(e);
             host.failed(this);
         });
+    }
+
+    /** true once the repository directory disappeared, nothing is refreshed or reported any more */
+    private boolean missing;
+
+    /**
+     * a dismissed error dialog activates the window again, which refreshes and fails again: once the directory
+     * is gone, watching stops and the host is told (only once) instead.
+     * @return true when the repository directory is gone
+     */
+    private boolean checkMissing() {
+        if (missing) return true;
+        if (java.nio.file.Files.isDirectory(workdir != null ? workdir : path)) return false;
+        missing = true;
+        statusBar.setText("Not found: " + (workdir != null ? workdir : path));
+        watchTimer.stop();
+        if (autoFetchTimer != null) autoFetchTimer.stop();
+        if (watcher != null) {
+            watcher.close();
+            watcher = null;
+        }
+        SwingUtilities.invokeLater(() -> host.missing(this));
+        return true;
     }
 
     /** the path given at creation */
@@ -497,6 +523,7 @@ public class RepoPanel extends JPanel {
     }
 
     private void showError(Throwable t) {
+        if (checkMissing()) return;
         Throwable c = t;
         while (c.getCause() != null && c.getMessage() == null) c = c.getCause();
         statusBar.setText("Error: " + c.getMessage());
@@ -522,7 +549,7 @@ public class RepoPanel extends JPanel {
 
     /** a batch of file system changes settled */
     private void watcherFired() {
-        if (repo == null && workdir == null) return;
+        if (repo == null && workdir == null || checkMissing()) return;
         List<String> paths = new ArrayList<>(pendingPaths);
         pendingPaths.clear();
         if (paths.remove(RepoWatcher.GIT_REFS)) {
@@ -571,6 +598,7 @@ public class RepoPanel extends JPanel {
      * the dirtiness changed, or when forced.
      */
     public void refreshAll(boolean force) {
+        if (checkMissing()) return;
         exec.submit(() -> {
             Status status = repo.status();
             List<Ref> refs = repo.refs();
@@ -627,7 +655,7 @@ public class RepoPanel extends JPanel {
 
     /** reloads the working copy status and the shown diff */
     public void refreshStatus() {
-        if (workdir == null) return;
+        if (workdir == null || checkMissing()) return;
         hooksPanel.refresh();
         exec.submit(() -> Map.entry(repo.status(), repo.state()), s -> {
             boolean dirty = !s.getKey().staged().isEmpty() || !s.getKey().unstaged().isEmpty();
