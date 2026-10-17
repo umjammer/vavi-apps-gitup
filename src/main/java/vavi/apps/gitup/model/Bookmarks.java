@@ -21,8 +21,10 @@ import java.util.List;
  * <pre>
  * G	work
  * 	R	app	/Users/me/src/app
+ * 	G	old	collapsed
  * R	dotfiles	/Users/me/dotfiles
  * </pre>
+ * a group shown collapsed in the repository browser has "collapsed" as the third field.
  *
  * @author <a href="mailto:umjammer@gmail.com">Naohide Sano</a> (nsano)
  * @version 0.00 2026-09-25 nsano initial version <br>
@@ -37,6 +39,7 @@ public final class Bookmarks {
     /** a group, children are mutable */
     public static final class Group implements Entry {
         private String name;
+        private boolean collapsed;
         private final List<Entry> children = new ArrayList<>();
 
         public Group(String name) {
@@ -45,6 +48,9 @@ public final class Bookmarks {
 
         @Override public String name() { return name; }
         public void setName(String name) { this.name = name; }
+        /** shown collapsed in the repository browser */
+        public boolean isCollapsed() { return collapsed; }
+        public void setCollapsed(boolean collapsed) { this.collapsed = collapsed; }
         public List<Entry> children() { return children; }
         @Override public String toString() { return name; }
     }
@@ -84,6 +90,7 @@ public final class Bookmarks {
                 Group parent = stack.getLast();
                 if (f[0].equals("G") && f.length >= 2) {
                     Group g = new Group(f[1]);
+                    g.setCollapsed(f.length >= 3 && f[2].equals("collapsed"));
                     parent.children().add(g);
                     stack.add(g);
                 } else if (f[0].equals("R") && f.length >= 3) {
@@ -112,7 +119,7 @@ public final class Bookmarks {
             sb.append("\t".repeat(depth));
             switch (e) {
                 case Group c -> {
-                    sb.append("G\t").append(clean(c.name())).append('\n');
+                    sb.append("G\t").append(clean(c.name())).append(c.isCollapsed() ? "\tcollapsed" : "").append('\n');
                     write(sb, c, depth + 1);
                 }
                 case Repo r -> sb.append("R\t").append(clean(r.name())).append('\t').append(r.path()).append('\n');

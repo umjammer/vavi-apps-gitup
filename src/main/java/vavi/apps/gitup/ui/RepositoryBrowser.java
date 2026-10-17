@@ -164,6 +164,7 @@ public class RepositoryBrowser extends JFrame {
         getContentPane().add(new JScrollPane(tree), BorderLayout.CENTER);
         getContentPane().add(bar, BorderLayout.SOUTH);
         WindowState.remember(this, "browser", new Dimension(380, 560));
+        migrateCollapsed();
         rebuild();
         addWindowListener(new java.awt.event.WindowAdapter() {
             @Override public void windowActivated(java.awt.event.WindowEvent e) {
@@ -359,37 +360,56 @@ public class RepositoryBrowser extends JFrame {
         javax.swing.SwingUtilities.invokeLater(this::rebuild);
     }
 
-    /** groups the user collapsed, as "/"-joined group names */
-    private final java.util.Set<String> collapsed = new java.util.HashSet<>(
-            java.util.Arrays.stream(WindowState.getString(COLLAPSED, "").split("\n")).filter(x -> !x.isEmpty()).toList());
+    /**
+     * the collapsed groups were kept in the preferences as "/"-joined group names (lost or mixed up
+     * when a group was moved, or had a sibling with the same name), now they are in the bookmarks
+     */
     private static final String COLLAPSED = "browser.collapsed";
     private boolean rebuilding;
 
-    /** expands groups top-down except the saved collapsed ones (all while searching) */
-    private void restoreExpansion(boolean useSaved) {
-        for (int i = 0; i < tree.getRowCount(); i++) {
-            TreePath p = tree.getPathForRow(i);
-            if (((DefaultMutableTreeNode) p.getLastPathComponent()).getUserObject() instanceof Group
-                    && !(useSaved && collapsed.contains(groupKey(p)))) {
-                tree.expandRow(i);
+    private void migrateCollapsed() {
+        String old = WindowState.getString(COLLAPSED, null);
+        if (old == null) return;
+        java.util.Set<String> keys = new java.util.HashSet<>(java.util.Arrays.asList(old.split("\n")));
+        migrateCollapsed(bookmarks.root(), "", keys);
+        save();
+        WindowState.remove(COLLAPSED);
+    }
+
+    private static void migrateCollapsed(Group g, String key, java.util.Set<String> keys) {
+        for (Entry e : g.children()) {
+            if (e instanceof Group c) {
+                String k = key + "/" + c.name();
+                if (keys.contains(k)) c.setCollapsed(true);
+                migrateCollapsed(c, k, keys);
             }
         }
     }
 
-    private static String groupKey(TreePath p) {
-        StringBuilder sb = new StringBuilder();
-        for (Object o : p.getPath()) {
-            if (((DefaultMutableTreeNode) o).getUserObject() instanceof Group g) sb.append('/').append(g.name());
+    /**
+     * expands every group, then collapses the saved collapsed ones deepest first, so that a group
+     * below a collapsed one has its own state when that is expanded. (all expanded while searching)
+     */
+    private void restoreExpansion(boolean useSaved) {
+        List<TreePath> groups = new ArrayList<>();
+        java.util.Enumeration<javax.swing.tree.TreeNode> e = rootNode.depthFirstEnumeration(); // children before parents
+        while (e.hasMoreElements()) {
+            DefaultMutableTreeNode n = (DefaultMutableTreeNode) e.nextElement();
+            if (n.getUserObject() instanceof Group) groups.add(new TreePath(n.getPath()));
         }
-        return sb.toString();
+        for (TreePath p : groups) tree.expandPath(p);
+        if (!useSaved) return;
+        for (TreePath p : groups) {
+            if (((Group) ((DefaultMutableTreeNode) p.getLastPathComponent()).getUserObject()).isCollapsed()) tree.collapsePath(p);
+        }
     }
 
     private void expansionChanged(TreePath p, boolean expanded) {
         if (rebuilding || !search.getText().isBlank()) return;
-        if (!(((DefaultMutableTreeNode) p.getLastPathComponent()).getUserObject() instanceof Group)) return;
-        if (expanded) collapsed.remove(groupKey(p));
-        else collapsed.add(groupKey(p));
-        WindowState.putString(COLLAPSED, String.join("\n", collapsed));
+        if (!(((DefaultMutableTreeNode) p.getLastPathComponent()).getUserObject() instanceof Group g)) return;
+        if (g.isCollapsed() == !expanded) return;
+        g.setCollapsed(!expanded);
+        save();
     }
 
     /** @return true when something below matched */
@@ -548,27 +568,11 @@ public class RepositoryBrowser extends JFrame {
     private void renamed(TreePath path, String name) {
         Entry e = (Entry) ((DefaultMutableTreeNode) path.getLastPathComponent()).getUserObject();
         if (name.strip().equals(e.name())) return;
-        String oldKey = e instanceof Group ? groupKey(path) : null;
         Entry renamed = bookmarks.rename(e, name);
         if (renamed == null) return;
-        if (oldKey != null) renameCollapsed(oldKey, groupKey(path)); // the group object is kept, the path shows the new name
         save();
         rebuildLater(); // called while the editor is being removed
         javax.swing.SwingUtilities.invokeLater(() -> select(renamed));
-    }
-
-    /** keeps the saved collapsed state of a renamed group and the groups below it */
-    private void renameCollapsed(String oldKey, String newKey) {
-        if (oldKey.equals(newKey)) return;
-        java.util.Set<String> moved = new java.util.HashSet<>();
-        collapsed.removeIf(k -> {
-            if (k.equals(oldKey)) moved.add(newKey);
-            else if (k.startsWith(oldKey + "/")) moved.add(newKey + k.substring(oldKey.length()));
-            else return false;
-            return true;
-        });
-        collapsed.addAll(moved);
-        WindowState.putString(COLLAPSED, String.join("\n", collapsed));
     }
 
     private void select(Entry entry) {
