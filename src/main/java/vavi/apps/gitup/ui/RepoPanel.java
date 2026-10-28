@@ -1037,8 +1037,8 @@ public class RepoPanel extends JPanel {
             menu.add(none);
         }
         for (String m : messages) {
-            String first = m.lines().findFirst().orElse("");
-            javax.swing.JMenuItem item = new javax.swing.JMenuItem(first.length() > 72 ? first.substring(0, 71) + "…" : first);
+            String all = m.lines().map(String::strip).filter(l -> !l.isEmpty()).collect(java.util.stream.Collectors.joining(" "));
+            javax.swing.JMenuItem item = new javax.swing.JMenuItem(all.length() > 120 ? all.substring(0, 119) + "…" : all);
             item.setToolTipText("<html><pre>" + m.replace("&", "&amp;").replace("<", "&lt;") + "</pre></html>");
             item.addActionListener(e -> {
                 staging.message.setText(m);
