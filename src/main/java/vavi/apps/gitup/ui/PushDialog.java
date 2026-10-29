@@ -69,8 +69,9 @@ public class PushDialog extends JDialog {
 
     /**
      * @param upstreams local branch to its upstream ("remote/branch"), absent when none
+     * @param last      the remote pushed to last time, null when none
      */
-    public PushDialog(Component parent, List<Remote> remotes, List<String> localBranches, Map<String, String> upstreams, String current) {
+    public PushDialog(Component parent, List<Remote> remotes, List<String> localBranches, Map<String, String> upstreams, String current, String last) {
         super(parent != null ? SwingUtilities.getWindowAncestor(parent) : null, "Push", ModalityType.APPLICATION_MODAL);
         this.remotes = remotes;
         this.upstreams = upstreams;
@@ -78,7 +79,8 @@ public class PushDialog extends JDialog {
 
         remotes.forEach(r -> remote.addItem(r.name()));
         String up = current != null ? upstreams.get(current) : null;
-        String preferred = up != null ? remoteOf(up) : remotes.stream().anyMatch(r -> r.name().equals("origin")) ? "origin" : null;
+        String preferred = last != null && remotes.stream().anyMatch(r -> r.name().equals(last)) ? last
+                : up != null ? remoteOf(up) : remotes.stream().anyMatch(r -> r.name().equals("origin")) ? "origin" : null;
         if (preferred != null) remote.setSelectedItem(preferred);
         remote.addActionListener(e -> remoteChanged());
 

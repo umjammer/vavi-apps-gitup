@@ -2319,6 +2319,10 @@ public class RepoPanel extends JPanel {
 
     private record PushInfo(List<GitRepo.Remote> remotes, List<String> branches, Map<String, String> upstreams, String current) {}
 
+    private String pushRemoteKey() {
+        return "push.remote." + workdir;
+    }
+
     /** SourceTree-like: asks the remote, the branches (remote names, tracking), tags and force, then pushes */
     private void push() {
         exec.submit(() -> {
@@ -2338,8 +2342,10 @@ public class RepoPanel extends JPanel {
                 showError(new IllegalStateException("no branch to push"));
                 return;
             }
-            PushDialog.Result r = new PushDialog(this, info.remotes(), info.branches(), info.upstreams(), info.current()).showDialog();
+            PushDialog.Result r = new PushDialog(this, info.remotes(), info.branches(), info.upstreams(), info.current(),
+                    WindowState.getString(pushRemoteKey(), null)).showDialog();
             if (r == null) return;
+            WindowState.putString(pushRemoteKey(), r.remote());
             if (r.force() && !confirm("Force push to " + r.remote() + "?\nCommits on the remote branches that are not here are lost.", "Force Push")) return;
             List<vavi.apps.gitup.objc.RemoteOps.BranchPush> pushes = r.branches().stream()
                     .map(b -> new vavi.apps.gitup.objc.RemoteOps.BranchPush(b.local(), b.remote())).toList();
