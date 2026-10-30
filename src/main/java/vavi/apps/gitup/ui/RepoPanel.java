@@ -92,6 +92,8 @@ public class RepoPanel extends JPanel {
         void titleChanged(RepoPanel panel);
         /** the repository could not be opened */
         void failed(RepoPanel panel);
+        /** the repository directory was moved, renamed or deleted, told once */
+        void missing(RepoPanel panel);
         /** recent commit messages, shared by the tabs */
         MessageHistory messageHistory();
     }
@@ -170,9 +172,33 @@ public class RepoPanel extends JPanel {
             hooksPanel.setHooks(new vavi.apps.gitup.model.GitHooks(workdir != null ? workdir : r.gitDir(), r.gitDir()));
             refreshAll(true);
         }, e -> {
+            if (checkMissing()) return;
             showError(e);
             host.failed(this);
         });
+    }
+
+    /** true once the repository directory disappeared, nothing is refreshed or reported any more */
+    private boolean missing;
+
+    /**
+     * a dismissed error dialog activates the window again, which refreshes and fails again: once the directory
+     * is gone, watching stops and the host is told (only once) instead.
+     * @return true when the repository directory is gone
+     */
+    private boolean checkMissing() {
+        if (missing) return true;
+        if (java.nio.file.Files.isDirectory(workdir != null ? workdir : path)) return false;
+        missing = true;
+        statusBar.setText("Not found: " + (workdir != null ? workdir : path));
+        watchTimer.stop();
+        if (autoFetchTimer != null) autoFetchTimer.stop();
+        if (watcher != null) {
+            watcher.close();
+            watcher = null;
+        }
+        SwingUtilities.invokeLater(() -> host.missing(this));
+        return true;
     }
 
     /** the path given at creation */
@@ -443,12 +469,14 @@ public class RepoPanel extends JPanel {
     private JButton pullButton, pushButton;
     private static final String PLAIN_ICON = "gitup.plainIcon";
 
-    /** behind on Pull, ahead on Push (as of the last fetch), like SourceTree */
-    private void setBadges(GitRepo.AheadBehind ab) {
-        int behind = ab != null ? ab.behind() : 0, ahead = ab != null ? ab.ahead() : 0;
-        String upstream = ab != null ? ab.upstream() : null;
-        badge(pullButton, behind, behind + " commit" + (behind == 1 ? "" : "s") + " behind " + upstream, pullAction);
-        badge(pushButton, ahead, ahead + " commit" + (ahead == 1 ? "" : "s") + " ahead of " + upstream, pushAction);
+    /**
+     * behind on Pull, ahead on Push (as of the last fetch), like SourceTree
+     * @param pab against the remote pushed to last time, the upstream when none
+     */
+    private void setBadges(GitRepo.AheadBehind ab, GitRepo.AheadBehind pab) {
+        int behind = ab != null ? ab.behind() : 0, ahead = pab != null ? pab.ahead() : 0;
+        badge(pullButton, behind, behind + " commit" + (behind == 1 ? "" : "s") + " behind " + (ab != null ? ab.upstream() : null), pullAction);
+        badge(pushButton, ahead, ahead + " commit" + (ahead == 1 ? "" : "s") + " ahead of " + (pab != null ? pab.upstream() : null), pushAction);
     }
 
     private static void badge(JButton b, int count, String what, Action a) {
@@ -497,6 +525,7 @@ public class RepoPanel extends JPanel {
     }
 
     private void showError(Throwable t) {
+        if (checkMissing()) return;
         Throwable c = t;
         while (c.getCause() != null && c.getMessage() == null) c = c.getCause();
         statusBar.setText("Error: " + c.getMessage());
@@ -522,7 +551,7 @@ public class RepoPanel extends JPanel {
 
     /** a batch of file system changes settled */
     private void watcherFired() {
-        if (repo == null && workdir == null) return;
+        if (repo == null && workdir == null || checkMissing()) return;
         List<String> paths = new ArrayList<>(pendingPaths);
         pendingPaths.clear();
         if (paths.remove(RepoWatcher.GIT_REFS)) {
@@ -545,7 +574,8 @@ public class RepoPanel extends JPanel {
 
     private record Snapshot(Status status, List<Ref> refs, Map<String, List<Ref>> byTarget, String head,
                             GitRepo.State state, List<Stash> stashes, List<GitRepo.Remote> remotes,
-                            CommitLog log, List<CommitRow> page, boolean more, GitRepo.AheadBehind aheadBehind) {}
+                            CommitLog log, List<CommitRow> page, boolean more, GitRepo.AheadBehind aheadBehind,
+                            GitRepo.AheadBehind pushAheadBehind) {}
 
     /** SourceTree's log filters (branches, remote branches, order), remembered per repository */
     private volatile CommitLog.Options logOptions = CommitLog.Options.DEFAULT;
@@ -571,6 +601,7 @@ public class RepoPanel extends JPanel {
      * the dirtiness changed, or when forced.
      */
     public void refreshAll(boolean force) {
+        if (checkMissing()) return;
         exec.submit(() -> {
             Status status = repo.status();
             List<Ref> refs = repo.refs();
@@ -594,14 +625,15 @@ public class RepoPanel extends JPanel {
                 if (r.target() == null || (!options.remotes() && r.kind() == Ref.Kind.REMOTE)) continue; // hidden remote branches: no labels
                 byTarget.computeIfAbsent(r.target(), k -> new ArrayList<>()).add(r);
             }
-            return new Snapshot(status, refs, byTarget, head, repo.state(), repo.stashes(), repo.remotes(), log, page, more, repo.aheadBehind());
+            return new Snapshot(status, refs, byTarget, head, repo.state(), repo.stashes(), repo.remotes(), log, page, more, repo.aheadBehind(),
+                    repo.aheadBehind(WindowState.getString(pushRemoteKey(), null)));
         }, s -> {
             headBranch = s.head();
             host.titleChanged(this);
             remotes = s.remotes();
             sidebar.setRefs(s.refs(), s.remotes(), headBranch);
             sidebar.setStashes(s.stashes());
-            setBadges(s.aheadBehind());
+            setBadges(s.aheadBehind(), s.pushAheadBehind());
             applyStatus(s.status(), s.state());
             if (s.page() == null) return; // log unchanged
             shownLog = s.log();
@@ -627,7 +659,7 @@ public class RepoPanel extends JPanel {
 
     /** reloads the working copy status and the shown diff */
     public void refreshStatus() {
-        if (workdir == null) return;
+        if (workdir == null || checkMissing()) return;
         hooksPanel.refresh();
         exec.submit(() -> Map.entry(repo.status(), repo.state()), s -> {
             boolean dirty = !s.getKey().staged().isEmpty() || !s.getKey().unstaged().isEmpty();
@@ -1009,8 +1041,8 @@ public class RepoPanel extends JPanel {
             menu.add(none);
         }
         for (String m : messages) {
-            String first = m.lines().findFirst().orElse("");
-            javax.swing.JMenuItem item = new javax.swing.JMenuItem(first.length() > 72 ? first.substring(0, 71) + "…" : first);
+            String all = m.lines().map(String::strip).filter(l -> !l.isEmpty()).collect(java.util.stream.Collectors.joining(" "));
+            javax.swing.JMenuItem item = new javax.swing.JMenuItem(all.length() > 120 ? all.substring(0, 119) + "…" : all);
             item.setToolTipText("<html><pre>" + m.replace("&", "&amp;").replace("<", "&lt;") + "</pre></html>");
             item.addActionListener(e -> {
                 staging.message.setText(m);
@@ -2291,6 +2323,10 @@ public class RepoPanel extends JPanel {
 
     private record PushInfo(List<GitRepo.Remote> remotes, List<String> branches, Map<String, String> upstreams, String current) {}
 
+    private String pushRemoteKey() {
+        return "push.remote." + workdir;
+    }
+
     /** SourceTree-like: asks the remote, the branches (remote names, tracking), tags and force, then pushes */
     private void push() {
         exec.submit(() -> {
@@ -2310,8 +2346,10 @@ public class RepoPanel extends JPanel {
                 showError(new IllegalStateException("no branch to push"));
                 return;
             }
-            PushDialog.Result r = new PushDialog(this, info.remotes(), info.branches(), info.upstreams(), info.current()).showDialog();
+            PushDialog.Result r = new PushDialog(this, info.remotes(), info.branches(), info.upstreams(), info.current(),
+                    WindowState.getString(pushRemoteKey(), null)).showDialog();
             if (r == null) return;
+            WindowState.putString(pushRemoteKey(), r.remote());
             if (r.force() && !confirm("Force push to " + r.remote() + "?\nCommits on the remote branches that are not here are lost.", "Force Push")) return;
             List<vavi.apps.gitup.objc.RemoteOps.BranchPush> pushes = r.branches().stream()
                     .map(b -> new vavi.apps.gitup.objc.RemoteOps.BranchPush(b.local(), b.remote())).toList();

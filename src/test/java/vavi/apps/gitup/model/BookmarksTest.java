@@ -83,6 +83,26 @@ class BookmarksTest {
     }
 
     @Test
+    void relocate() {
+        Bookmarks b = new Bookmarks();
+        Group work = new Group("work");
+        work.children().add(new Repo("app", Path.of("/src/app")));
+        work.children().add(new Repo("My Lib", Path.of("/src/lib")));
+        b.root().children().add(work);
+        b.addIfAbsent(Path.of("/src/other"));
+
+        assertTrue(b.relocate(Path.of("/src/app"), Path.of("/src/app2")));
+        assertEquals(new Repo("app2", Path.of("/src/app2")), work.children().getFirst()); // the folder name follows
+        assertTrue(b.relocate(Path.of("/src/lib"), Path.of("/src/lib2")));
+        assertEquals(new Repo("My Lib", Path.of("/src/lib2")), work.children().get(1)); // named by the user: kept
+        assertFalse(b.relocate(Path.of("/src/none"), Path.of("/src/x")));
+
+        assertTrue(b.relocate(Path.of("/src/app2"), Path.of("/src/other"))); // bookmarked already
+        assertEquals(1, work.children().size());
+        assertNotNull(b.find(Path.of("/src/other")));
+    }
+
+    @Test
     void collapsed() throws Exception {
         Bookmarks b = new Bookmarks();
         Group work = new Group("work");

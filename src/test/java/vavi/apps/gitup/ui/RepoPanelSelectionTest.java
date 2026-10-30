@@ -105,6 +105,7 @@ class RepoPanelSelectionTest {
         RepoPanel panel = onEdt(() -> new RepoPanel(dir, new RepoPanel.Host() {
             @Override public void titleChanged(RepoPanel panel) {}
             @Override public void failed(RepoPanel panel) {}
+            @Override public void missing(RepoPanel panel) {}
             @Override public MessageHistory messageHistory() { return new MessageHistory(dir.resolve(".git/test-history"), 10); }
         }));
         try {

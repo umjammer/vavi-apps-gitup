@@ -178,6 +178,21 @@ public final class Bookmarks {
         }
     }
 
+    /**
+     * points the repository bookmarked at the path to where it was moved, at the same place in the tree.
+     * the display name follows the folder name unless the user named it. when the new path is bookmarked
+     * already the old bookmark is just removed.
+     * @return true when changed
+     */
+    public boolean relocate(Path path, Path to) {
+        Repo r = find(path);
+        if (r == null) return false;
+        Path n = to.toAbsolutePath().normalize();
+        if (find(n) != null) return remove(r);
+        String name = r.name().equals(Repo.defaultName(r.path())) ? Repo.defaultName(n) : r.name();
+        return replace(root, r, new Repo(name, n));
+    }
+
     private static boolean replace(Group g, Entry old, Entry neu) {
         int i = g.children().indexOf(old);
         if (i >= 0) {
