@@ -160,6 +160,23 @@ public class GitRepo implements AutoCloseable {
         if (branch == null || "HEAD".equals(branch)) return null;
         String upstream = upstream(branch);
         if (upstream == null) return null;
+        return aheadBehind(branch, upstream);
+    }
+
+    /**
+     * @param remote the remote to compare with, null for the upstream
+     * @return against the upstream when it is on the remote, else against "remote/branch" (as of the last fetch),
+     *         null when detached, unborn, or there is nothing to compare with
+     */
+    public AheadBehind aheadBehind(String remote) {
+        if (remote == null) return aheadBehind();
+        String branch = headBranch();
+        if (branch == null || "HEAD".equals(branch)) return null;
+        String upstream = upstream(branch);
+        return aheadBehind(branch, upstream != null && upstream.startsWith(remote + "/") ? upstream : remote + "/" + branch);
+    }
+
+    private AheadBehind aheadBehind(String branch, String upstream) {
         PointerByReference op = new PointerByReference();
         if (git.git_revparse_single(op, handle(), "refs/remotes/" + upstream) != 0) return null; // upstream gone
         GitOid remote = new GitOid(); // own memory, the object's id is freed with it

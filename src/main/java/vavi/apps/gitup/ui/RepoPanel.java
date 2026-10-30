@@ -469,12 +469,14 @@ public class RepoPanel extends JPanel {
     private JButton pullButton, pushButton;
     private static final String PLAIN_ICON = "gitup.plainIcon";
 
-    /** behind on Pull, ahead on Push (as of the last fetch), like SourceTree */
-    private void setBadges(GitRepo.AheadBehind ab) {
-        int behind = ab != null ? ab.behind() : 0, ahead = ab != null ? ab.ahead() : 0;
-        String upstream = ab != null ? ab.upstream() : null;
-        badge(pullButton, behind, behind + " commit" + (behind == 1 ? "" : "s") + " behind " + upstream, pullAction);
-        badge(pushButton, ahead, ahead + " commit" + (ahead == 1 ? "" : "s") + " ahead of " + upstream, pushAction);
+    /**
+     * behind on Pull, ahead on Push (as of the last fetch), like SourceTree
+     * @param pab against the remote pushed to last time, the upstream when none
+     */
+    private void setBadges(GitRepo.AheadBehind ab, GitRepo.AheadBehind pab) {
+        int behind = ab != null ? ab.behind() : 0, ahead = pab != null ? pab.ahead() : 0;
+        badge(pullButton, behind, behind + " commit" + (behind == 1 ? "" : "s") + " behind " + (ab != null ? ab.upstream() : null), pullAction);
+        badge(pushButton, ahead, ahead + " commit" + (ahead == 1 ? "" : "s") + " ahead of " + (pab != null ? pab.upstream() : null), pushAction);
     }
 
     private static void badge(JButton b, int count, String what, Action a) {
@@ -572,7 +574,8 @@ public class RepoPanel extends JPanel {
 
     private record Snapshot(Status status, List<Ref> refs, Map<String, List<Ref>> byTarget, String head,
                             GitRepo.State state, List<Stash> stashes, List<GitRepo.Remote> remotes,
-                            CommitLog log, List<CommitRow> page, boolean more, GitRepo.AheadBehind aheadBehind) {}
+                            CommitLog log, List<CommitRow> page, boolean more, GitRepo.AheadBehind aheadBehind,
+                            GitRepo.AheadBehind pushAheadBehind) {}
 
     /** SourceTree's log filters (branches, remote branches, order), remembered per repository */
     private volatile CommitLog.Options logOptions = CommitLog.Options.DEFAULT;
@@ -622,14 +625,15 @@ public class RepoPanel extends JPanel {
                 if (r.target() == null || (!options.remotes() && r.kind() == Ref.Kind.REMOTE)) continue; // hidden remote branches: no labels
                 byTarget.computeIfAbsent(r.target(), k -> new ArrayList<>()).add(r);
             }
-            return new Snapshot(status, refs, byTarget, head, repo.state(), repo.stashes(), repo.remotes(), log, page, more, repo.aheadBehind());
+            return new Snapshot(status, refs, byTarget, head, repo.state(), repo.stashes(), repo.remotes(), log, page, more, repo.aheadBehind(),
+                    repo.aheadBehind(WindowState.getString(pushRemoteKey(), null)));
         }, s -> {
             headBranch = s.head();
             host.titleChanged(this);
             remotes = s.remotes();
             sidebar.setRefs(s.refs(), s.remotes(), headBranch);
             sidebar.setStashes(s.stashes());
-            setBadges(s.aheadBehind());
+            setBadges(s.aheadBehind(), s.pushAheadBehind());
             applyStatus(s.status(), s.state());
             if (s.page() == null) return; // log unchanged
             shownLog = s.log();
