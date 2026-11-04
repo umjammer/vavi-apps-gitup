@@ -619,6 +619,14 @@ public class RepositoryBrowser extends JFrame {
                     java.awt.Toolkit.getDefaultToolkit().beep();
                 }
             });
+            vavi.apps.gitup.model.Ide ide = vavi.apps.gitup.model.Settings.get().ide();
+            item(menu, "Open in " + ide.name(), () -> {
+                try {
+                    ide.open(r.path());
+                } catch (IOException ex) {
+                    java.awt.Toolkit.getDefaultToolkit().beep();
+                }
+            });
             item(menu, "Copy Path", () -> LogPanel.copy(r.path().toString()));
             menu.addSeparator();
         }

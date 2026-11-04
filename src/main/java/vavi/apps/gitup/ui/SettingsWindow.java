@@ -44,6 +44,7 @@ import vavi.apps.gitup.model.Accounts.Account;
 import vavi.apps.gitup.model.Accounts.Protocol;
 import vavi.apps.gitup.model.Accounts.Service;
 import vavi.apps.gitup.model.ExternalTool;
+import vavi.apps.gitup.model.Ide;
 import vavi.apps.gitup.model.MavenSettings;
 import vavi.apps.gitup.model.MavenSettings.Server;
 import vavi.apps.gitup.model.Settings;
@@ -390,12 +391,28 @@ public class SettingsWindow extends JFrame {
         avatars.addActionListener(e -> settings.setAvatars(avatars.isSelected()));
         JLabel avatarsNote = new JLabel("<html><font color='gray'>from GitHub (the commits of a github.com remote, noreply emails), "
                 + "then Gravatar (a hash of the email)</font></html>");
-        avatarsNote.setBorder(BorderFactory.createEmptyBorder(0, 28, 0, 0));
+        avatarsNote.setBorder(BorderFactory.createEmptyBorder(0, 28, 8, 0));
+
+        // the installed IDEs, plus the chosen one when it is not installed (shown as "not found")
+        List<Ide> ides = new ArrayList<>(Ide.installedPresets());
+        Ide current = settings.ide();
+        if (!ides.contains(current)) ides.addFirst(current);
+        JComboBox<Ide> ide = new JComboBox<>(ides.toArray(Ide[]::new));
+        ide.setSelectedItem(current);
+        ide.addActionListener(e -> {
+            if (ide.getSelectedItem() instanceof Ide i) settings.setIdeId(i.id());
+        });
+        JPanel ideRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        ideRow.add(new JLabel("Open repositories in IDE:"));
+        ideRow.add(ide);
+        JLabel ideNote = new JLabel("<html><font color='gray'>the repository browser's \"Open in …\" menu, "
+                + "IDEs found in /Applications and ~/Applications</font></html>");
+        ideNote.setBorder(BorderFactory.createEmptyBorder(0, 28, 0, 0));
 
         JPanel p = new JPanel();
         p.setLayout(new javax.swing.BoxLayout(p, javax.swing.BoxLayout.Y_AXIS));
         p.setBorder(BorderFactory.createEmptyBorder(12, 8, 12, 12));
-        for (JComponent c : new JComponent[] {fetchRow, fetchNote, spell, spellNote, avatars, avatarsNote}) {
+        for (JComponent c : new JComponent[] {fetchRow, fetchNote, spell, spellNote, avatars, avatarsNote, ideRow, ideNote}) {
             c.setAlignmentX(0);
             p.add(c);
         }
