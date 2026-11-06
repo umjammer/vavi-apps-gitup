@@ -2231,11 +2231,24 @@ public class RepoPanel extends JPanel {
     /** @param rebase null: as configured (pull.rebase / branch.&lt;name&gt;.rebase) */
     private void pull(Boolean rebase) {
         remoteOp(Boolean.TRUE.equals(rebase) ? "Pull (rebase)" : "Pull", ops -> {
-            ops.fetchAll();
+            String current = repo.headBranch();
+            fetchRemoteOf(ops, current != null && !"HEAD".equals(current) ? repo.upstream(current) : null);
             GitRepo.RefSnapshot snapshot = repo.snapshotRefs("Pull", false);
             PullResult r = repo.pullFromUpstream(rebase != null ? rebase : repo.isPullRebaseConfigured());
             return pulled(r, snapshot, null);
         });
+    }
+
+    /**
+     * the fetch of a pull: only the remote pulled from, another one (e.g. its token expired) must not stop the pull.
+     * @param remoteBranch "remote/branch", all remotes when null or of no remote
+     */
+    private void fetchRemoteOf(RemoteOps ops, String remoteBranch) {
+        String remote = remoteBranch == null ? null : repo.remotes().stream().map(GitRepo.Remote::name)
+                .filter(n -> remoteBranch.startsWith(n + "/"))
+                .max(java.util.Comparator.comparingInt(String::length)).orElse(null);
+        if (remote != null) ops.fetch(remote);
+        else ops.fetchAll();
     }
 
     /** undo, conflicts, the status message after a pull, on the git thread */
@@ -2301,7 +2314,7 @@ public class RepoPanel extends JPanel {
             PullDialog.Result r = new PullDialog(this, info.remotes(), info.branches(), info.current(), info.upstream(), info.rebase(), refresher).showDialog();
             if (r == null) return;
             remoteOp(r.rebase() ? "Pull (rebase)" : "Pull", ops -> {
-                ops.fetchAll();
+                fetchRemoteOf(ops, r.remoteBranch());
                 GitRepo.RefSnapshot snapshot = repo.snapshotRefs("Pull", false);
                 String message = null;
                 if (!r.rebase()) {
@@ -2386,7 +2399,8 @@ public class RepoPanel extends JPanel {
                 String note = rejected == null ? null
                         : "The saved password / token of " + rejected + " was rejected by the server (expired or revoked?). "
                         + "Enter a valid one, \"Remember\" replaces the saved one."
-                        + (rejected.host().contains("github.com") ? " GitHub needs a personal access token with the repo scope." : "");
+                        + (rejected.host().contains("github.com") ? " GitHub needs a personal access token with the repo scope."
+                                : rejected.host().contains("bitbucket.org") ? vavi.apps.gitup.model.Accounts.BITBUCKET_HINT : "");
                 vavi.apps.gitup.objc.NativePrompt.Answer a = vavi.apps.gitup.objc.NativePrompt.userPassword(url,
                         rejected != null ? rejected.username() : user, true, note);
                 if (a == null) return null;

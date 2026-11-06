@@ -89,8 +89,9 @@ public class RemoteOps implements AutoCloseable {
     private GitException transferError(String what, NSError error) {
         GitException ge = new GitException(what + ": " + (error != null ? error.localizedDescription() : "unknown error"));
         if (delegate.authAsked > 0) {
-            String hint = delegate.authUrl != null && delegate.authUrl.contains("github.com")
-                    ? " GitHub does not accept account passwords, use a personal access token as the password." : "";
+            String hint = delegate.authUrl == null ? ""
+                    : delegate.authUrl.contains("github.com") ? " GitHub does not accept account passwords, use a personal access token as the password."
+                    : delegate.authUrl.contains("bitbucket.org") ? vavi.apps.gitup.model.Accounts.BITBUCKET_HINT : "";
             return new GitException(what + ": authentication failed for " + delegate.authUrl + "." + hint
                     + " (" + ge.getMessage().substring(what.length() + 2) + ")");
         }
@@ -111,6 +112,23 @@ public class RemoteOps implements AutoCloseable {
                 if (!repo.fetchDefaultRemoteBranchesFromRemote_tagMode_prune_updatedTips_error(remote, 0, true, null, e)) {
                     throw transferError("fetch " + remote.name(), e);
                 }
+            }
+        } finally {
+            pool.drain();
+        }
+    }
+
+    /** fetches the default branches of a remote (with prune) */
+    public void fetch(String remoteName) {
+        delegate.reset();
+        NSAutoreleasePool pool = NSAutoreleasePool.new_();
+        try {
+            ObjCObjectByReference e = new ObjCObjectByReference();
+            GCRemote remote = repo.lookupRemoteWithName_error(remoteName, e);
+            if (remote == null) throw error("remote " + remoteName, e);
+            commandLog.add("git fetch --prune " + vavi.apps.gitup.model.CommandLog.quote(remoteName), "GitUpKit transport");
+            if (!repo.fetchDefaultRemoteBranchesFromRemote_tagMode_prune_updatedTips_error(remote, 0, true, null, e)) {
+                throw transferError("fetch " + remoteName, e);
             }
         } finally {
             pool.drain();

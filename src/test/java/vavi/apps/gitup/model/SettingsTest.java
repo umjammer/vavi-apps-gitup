@@ -134,6 +134,16 @@ class SettingsTest {
         assertEquals("git.example.com", Accounts.host("ssh://git@git.example.com:22/team/repo.git"));
         assertNull(Accounts.host("/local/path"));
 
+        // bitbucket's fixed username of API tokens, the url has the real one
+        Account token = new Account(Service.BITBUCKET, "bitbucket.org", "x-bitbucket-api-token-auth", Protocol.HTTPS);
+        b.put(token, "token3");
+        assertEquals(token, b.find("https://umjammer@bitbucket.org/umjammer/x.git", "umjammer"));
+        Account real = new Account(Service.BITBUCKET, "bitbucket.org", "umjammer", Protocol.HTTPS);
+        b.put(real, "token4");
+        assertEquals(real, b.find("https://umjammer@bitbucket.org/umjammer/x.git", "umjammer"), "the url's user first");
+        b.remove(token, true);
+        b.remove(real, true);
+
         // an item of an older version (without the domain) is found quietly and moved over
         Map<String, String> legacy = new HashMap<>(Map.of("gitlab.com/carol", "old-token"));
         Accounts.SecretStore withLegacy = new Accounts.SecretStore() {
