@@ -11,6 +11,7 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 
 
@@ -149,6 +150,54 @@ public final class Bookmarks {
             }
         }
         return null;
+    }
+
+    /**
+     * @param query lower case, an empty one matches everything
+     * @return true when the name of the group, or the name or the path of the repository contains it
+     */
+    public static boolean matches(Entry entry, String query) {
+        return switch (entry) {
+            case Group g -> g.name().toLowerCase().contains(query);
+            case Repo r -> r.name().toLowerCase().contains(query) || r.path().toString().toLowerCase().contains(query);
+        };
+    }
+
+    /** @return the entries matching the query (see {@link #matches}), not looking below a matching group */
+    public List<Entry> search(String query) {
+        List<Entry> found = new ArrayList<>();
+        search(root, query, found);
+        return found;
+    }
+
+    private static void search(Group g, String query, List<Entry> found) {
+        for (Entry e : g.children()) {
+            if (matches(e, query)) found.add(e);
+            else if (e instanceof Group c) search(c, query, found);
+        }
+    }
+
+    /**
+     * expands the groups above the entries, not the entries themselves when they are groups.
+     * @return true when changed
+     */
+    public boolean reveal(Collection<Entry> entries) {
+        List<Group> above = new ArrayList<>();
+        collectAbove(root, entries, above);
+        boolean changed = above.stream().anyMatch(Group::isCollapsed);
+        above.forEach(g -> g.setCollapsed(false));
+        return changed;
+    }
+
+    /** @return true when any of the entries is below the group */
+    private static boolean collectAbove(Group g, Collection<Entry> entries, List<Group> above) {
+        boolean any = false;
+        for (Entry e : g.children()) {
+            any |= entries.contains(e);
+            if (e instanceof Group c) any |= collectAbove(c, entries, above);
+        }
+        if (any) above.add(g);
+        return any;
     }
 
     /** adds the repository at the top level unless bookmarked already, @return true when added */
