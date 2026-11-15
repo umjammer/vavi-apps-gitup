@@ -75,6 +75,10 @@ public class LogPanel extends JPanel {
         /** SourceTree's "Reset current branch to this commit" */
         void resetTo(CommitRow commit);
         void checkoutCommit(CommitRow commit);
+        /** a double click: checks out without asking when nothing is in the way, otherwise as {@link #checkoutCommit} */
+        void checkoutCommitDirectly(CommitRow commit);
+        /** melds the commits (a first parent chain, newest first) into the oldest one, as one undo step */
+        void squashMany(List<CommitRow> commits);
         void mergeCommit(CommitRow commit);
         void cherryPick(CommitRow commit);
         /** one of the dropdowns above the log changed */
@@ -151,6 +155,12 @@ public class LogPanel extends JPanel {
         table.addMouseListener(new MouseAdapter() {
             @Override public void mousePressed(MouseEvent e) { if (e.isPopupTrigger()) popup(e); }
             @Override public void mouseReleased(MouseEvent e) { if (e.isPopupTrigger()) popup(e); }
+            @Override public void mouseClicked(MouseEvent e) {
+                if (e.getClickCount() != 2 || !javax.swing.SwingUtilities.isLeftMouseButton(e) || listener == null) return;
+                int r = table.rowAtPoint(e.getPoint());
+                CommitRow c = r < 0 ? null : commitAt(r);
+                if (c != null) listener.checkoutCommitDirectly(c);
+            }
         });
         int menu = Keys.menu();
         table.getInputMap(JComponent.WHEN_FOCUSED).put(KeyStroke.getKeyStroke(KeyEvent.VK_C, menu), "copyOid");
@@ -346,6 +356,13 @@ public class LogPanel extends JPanel {
             rewriteItem(menu, "Move Down (Swap with Parent)", c, Rewrite.MOVE_DOWN, single);
             rewriteItem(menu, "Delete Commit…", c, Rewrite.DELETE, single);
             menu.addSeparator();
+        } else {
+            boolean chain = isFirstParentChain(selected);
+            JMenuItem squash = item(menu, "Squash " + selected.size() + " Commits Into " + selected.getLast().shortOid() + "…",
+                    () -> { if (listener != null) listener.squashMany(selected); });
+            squash.setEnabled(chain);
+            if (!chain) squash.setToolTipText("the commits must follow each other (each one the only child of the next), without merge commits");
+            menu.addSeparator();
         }
         javax.swing.JMenu copy = new javax.swing.JMenu("Copy");
         copyItem(copy, "SHA", selected, CommitRow::oid);
@@ -363,6 +380,19 @@ public class LogPanel extends JPanel {
         JMenuItem i = new JMenuItem(label);
         i.addActionListener(e -> copy(rows.stream().map(f).collect(Collectors.joining(label.equals("Message") ? "\n\n" : "\n"))));
         menu.add(i);
+    }
+
+    /**
+     * @param commits newest first
+     * @return true when every commit but the oldest has a single parent, the next one in the list
+     */
+    static boolean isFirstParentChain(List<CommitRow> commits) {
+        if (commits.size() < 2) return false;
+        for (int i = 0; i < commits.size() - 1; i++) {
+            List<String> parents = commits.get(i).parents();
+            if (parents.size() != 1 || !parents.getFirst().equals(commits.get(i + 1).oid())) return false;
+        }
+        return true;
     }
 
     /** @return selected commits in table order (newest first), without the uncommitted row */

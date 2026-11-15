@@ -83,6 +83,13 @@ public class RepositoryBrowser extends JFrame {
     private final JTextField search = new JTextField();
     /** filters after a pause in typing, not on every keystroke */
     private final javax.swing.Timer searchTimer = new javax.swing.Timer(150, e -> rebuild());
+    /**
+     * the last query with results. stays while it is deleted letter by letter, those shorter
+     * ones are not what was looked for.
+     */
+    private String searched = "";
+    /** more results than this, like those of the first letter typed, are not opened when the search ends */
+    private static final int MAX_REVEALED = 5;
 
     /** @param opener opens a repository in a tab */
     public RepositoryBrowser(Bookmarks bookmarks, Path file, Consumer<Path> opener) {
@@ -339,16 +346,41 @@ public class RepositoryBrowser extends JFrame {
 
     private void rebuild() {
         String q = search.getText().strip().toLowerCase();
+        List<Entry> revealed = q.isEmpty() ? endSearch() : List.of();
         rebuilding = true;
         try {
             rootNode.removeAllChildren();
-            add(rootNode, bookmarks.root(), q);
+            boolean found = add(rootNode, bookmarks.root(), q);
+            if (found && !searched.contains(q)) searched = q;
             model.reload();
             restoreExpansion(q.isEmpty());
+            select(revealed);
         } finally {
             rebuilding = false;
         }
         refreshStatus(true);
+    }
+
+    /**
+     * the search field was emptied, opens the way to what was searched, as the user would by hand
+     * (saved, otherwise the next rebuild collapses it again): the entries selected in the results,
+     * else the results themselves unless they are too many to have been the goal.
+     * @return the entries to select
+     */
+    private List<Entry> endSearch() {
+        if (searched.isEmpty()) return List.of();
+        List<Entry> entries = new ArrayList<>();
+        TreePath[] paths = tree.getSelectionPaths();
+        if (paths != null) {
+            for (TreePath p : paths) entries.add((Entry) ((DefaultMutableTreeNode) p.getLastPathComponent()).getUserObject());
+        }
+        if (entries.isEmpty()) {
+            entries = bookmarks.search(searched);
+            if (entries.size() > MAX_REVEALED) entries = List.of();
+        }
+        searched = "";
+        if (bookmarks.reveal(entries)) save();
+        return entries;
     }
 
     /**
@@ -419,7 +451,7 @@ public class RepositoryBrowser extends JFrame {
             switch (e) {
                 case Group c -> {
                     DefaultMutableTreeNode n = new DefaultMutableTreeNode(c);
-                    boolean groupMatches = q.isEmpty() || c.name().toLowerCase().contains(q);
+                    boolean groupMatches = Bookmarks.matches(c, q);
                     boolean below = add(n, c, groupMatches ? "" : q);
                     if (groupMatches || below) {
                         parent.add(n);
@@ -427,7 +459,7 @@ public class RepositoryBrowser extends JFrame {
                     }
                 }
                 case Repo r -> {
-                    if (q.isEmpty() || r.name().toLowerCase().contains(q) || r.path().toString().toLowerCase().contains(q)) {
+                    if (Bookmarks.matches(r, q)) {
                         parent.add(new DefaultMutableTreeNode(r, false));
                         any = true;
                     }
@@ -572,20 +604,18 @@ public class RepositoryBrowser extends JFrame {
         if (renamed == null) return;
         save();
         rebuildLater(); // called while the editor is being removed
-        javax.swing.SwingUtilities.invokeLater(() -> select(renamed));
+        javax.swing.SwingUtilities.invokeLater(() -> select(List.of(renamed)));
     }
 
-    private void select(Entry entry) {
+    private void select(List<Entry> entries) {
+        List<TreePath> paths = new ArrayList<>();
         java.util.Enumeration<javax.swing.tree.TreeNode> e = rootNode.depthFirstEnumeration();
         while (e.hasMoreElements()) {
             DefaultMutableTreeNode n = (DefaultMutableTreeNode) e.nextElement();
-            if (n.getUserObject() == entry) {
-                TreePath p = new TreePath(n.getPath());
-                tree.setSelectionPath(p);
-                tree.scrollPathToVisible(p);
-                return;
-            }
+            if (n.getUserObject() instanceof Entry entry && entries.contains(entry)) paths.add(new TreePath(n.getPath()));
         }
+        tree.setSelectionPaths(paths.toArray(TreePath[]::new));
+        if (!paths.isEmpty()) tree.scrollPathToVisible(paths.getFirst());
     }
 
     private void removeSelected() {
@@ -615,6 +645,14 @@ public class RepositoryBrowser extends JFrame {
             item(menu, "Show in Finder", () -> {
                 try {
                     new ProcessBuilder("open", r.path().toString()).start();
+                } catch (IOException ex) {
+                    java.awt.Toolkit.getDefaultToolkit().beep();
+                }
+            });
+            vavi.apps.gitup.model.Ide ide = vavi.apps.gitup.model.Settings.get().ide();
+            item(menu, "Open in " + ide.name(), () -> {
+                try {
+                    ide.open(r.path());
                 } catch (IOException ex) {
                     java.awt.Toolkit.getDefaultToolkit().beep();
                 }

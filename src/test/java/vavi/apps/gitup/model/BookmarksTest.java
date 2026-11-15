@@ -8,6 +8,7 @@ package vavi.apps.gitup.model;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -122,5 +123,60 @@ class BookmarksTest {
     @Test
     void missingFile() {
         assertEquals(0, Bookmarks.load(dir.resolve("none.txt")).root().children().size());
+    }
+
+    /** work/{Sub/{app}, lib}, Old (a collapsed tree) */
+    private static Bookmarks tree() {
+        Bookmarks b = new Bookmarks();
+        Group work = new Group("work");
+        Group sub = new Group("Sub");
+        sub.children().add(new Repo("App", Path.of("/src/app")));
+        work.children().add(sub);
+        work.children().add(new Repo("lib", Path.of("/src/lib")));
+        b.root().children().add(work);
+        b.root().children().add(new Group("old"));
+        work.setCollapsed(true);
+        sub.setCollapsed(true);
+        ((Group) b.root().children().getLast()).setCollapsed(true);
+        return b;
+    }
+
+    @Test
+    void search() {
+        Bookmarks b = tree();
+        Group work = (Group) b.root().children().getFirst();
+        Group sub = (Group) work.children().getFirst();
+        assertEquals(List.of(sub.children().getFirst()), b.search("app"), "by name, case insensitive");
+        assertEquals(List.of(sub.children().getFirst(), work.children().getLast()), b.search("/src/"), "by path");
+        assertEquals(List.of(work), b.search("work"), "by group");
+        assertEquals(List.of(sub), b.search("sub"), "not below a matching group");
+        assertEquals(List.of(), b.search("none"));
+    }
+
+    @Test
+    void reveal() {
+        Bookmarks b = tree();
+        Group work = (Group) b.root().children().getFirst();
+        Group sub = (Group) work.children().getFirst();
+        Group old = (Group) b.root().children().getLast();
+
+        assertTrue(b.reveal(List.of(sub.children().getFirst())));
+        assertFalse(work.isCollapsed());
+        assertFalse(sub.isCollapsed());
+        assertTrue(old.isCollapsed(), "only the way to the entry");
+
+        assertFalse(b.reveal(List.of(sub.children().getFirst())), "already open");
+        assertFalse(b.reveal(List.of()));
+    }
+
+    @Test
+    void revealGroupKeepsItCollapsed() {
+        Bookmarks b = tree();
+        Group work = (Group) b.root().children().getFirst();
+        Group sub = (Group) work.children().getFirst();
+
+        assertTrue(b.reveal(List.of(sub)));
+        assertFalse(work.isCollapsed());
+        assertTrue(sub.isCollapsed());
     }
 }

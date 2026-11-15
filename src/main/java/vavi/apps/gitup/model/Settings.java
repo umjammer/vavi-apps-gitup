@@ -149,6 +149,20 @@ public final class Settings {
         return id.equals(ExternalTool.CUSTOM) ? blankToNull(customMergeCommand()) : ExternalTool.preset(id).merge();
     }
 
+    /** the IDE of the repository browser's "Open in IDE", default IntelliJ IDEA */
+    public String ideId() {
+        return prefs.get("tool.ide", Ide.DEFAULT);
+    }
+
+    public void setIdeId(String id) {
+        prefs.put("tool.ide", id);
+        changed();
+    }
+
+    public Ide ide() {
+        return Ide.preset(ideId());
+    }
+
     /** the font family of the diff view, null means the default (SourceTree's Menlo) */
     public String diffFontName() {
         return blankToNull(prefs.get("diff.font.name", null));

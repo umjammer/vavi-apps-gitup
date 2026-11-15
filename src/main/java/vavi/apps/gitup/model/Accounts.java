@@ -50,6 +50,14 @@ public final class Accounts {
 
     public enum Protocol { HTTPS, SSH }
 
+    /** what bitbucket.org wants from an API token over git, an atlassian account email is for its REST API only */
+    public static final String BITBUCKET_HINT = " Bitbucket needs an API token with the scopes read:repository:bitbucket"
+            + " (and write:repository:bitbucket to push), with the case sensitive username of its account settings"
+            + " or x-bitbucket-api-token-auth as the username, not the email address.";
+
+    /** bitbucket's fixed usernames of API tokens, they work with any url, even one that has the real username in it */
+    private static final List<String> BITBUCKET_TOKEN_USERS = List.of("x-bitbucket-api-token-auth", "x-token-auth");
+
     public record Account(Service service, String host, String username, Protocol protocol) {
         @Override public String toString() { return username + "@" + host; }
     }
@@ -165,6 +173,9 @@ public final class Accounts {
         if (host == null) return null;
         for (Account a : accounts) {
             if (a.host().equalsIgnoreCase(host) && (user == null || user.isEmpty() || a.username().equals(user))) return a;
+        }
+        for (Account a : accounts) {
+            if (a.host().equalsIgnoreCase(host) && BITBUCKET_TOKEN_USERS.contains(a.username())) return a;
         }
         return null;
     }
