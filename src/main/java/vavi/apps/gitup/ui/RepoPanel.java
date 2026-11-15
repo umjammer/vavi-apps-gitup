@@ -312,6 +312,8 @@ public class RepoPanel extends JPanel {
             @Override public void fixupInto(CommitRow commit) { RepoPanel.this.fixupInto(commit); }
             @Override public void resetTo(CommitRow commit) { RepoPanel.this.resetTo(commit); }
             @Override public void checkoutCommit(CommitRow commit) { RepoPanel.this.checkoutCommit(commit); }
+            @Override public void checkoutCommitDirectly(CommitRow commit) { RepoPanel.this.checkoutCommitDirectly(commit); }
+            @Override public void squashMany(List<CommitRow> commits) { RepoPanel.this.squashMany(commits); }
             @Override public void mergeCommit(CommitRow commit) { RepoPanel.this.mergeCommit(commit); }
             @Override public void cherryPick(CommitRow commit) { RepoPanel.this.cherryPick(commit); }
         });
@@ -1638,6 +1640,72 @@ public class RepoPanel extends JPanel {
     }
 
     /**
+     * squashes several commits (a first parent chain, newest first) into the oldest one with a message
+     * edited by the user. GitUpKit squashes one commit into its parent at a time, so the newest is squashed
+     * into its parent, the result into the next parent and so on. all steps are one undo step, when a step
+     * fails the references are put back.
+     */
+    private void squashMany(List<CommitRow> commits) {
+        if (!LogPanel.isFirstParentChain(commits)) return;
+        CommitRow oldest = commits.getLast();
+        exec.submit(() -> {
+            Status st = repo.status();
+            boolean clean = st.staged().isEmpty() && st.unstaged().stream().allMatch(f -> f.kind() == FileChange.Kind.UNTRACKED);
+            return new Object[] {repo.publishedIn(oldest.oid()), repo.state(), clean};
+        }, info -> {
+            @SuppressWarnings("unchecked")
+            List<String> pushed = (List<String>) info[0];
+            if (info[1] != GitRepo.State.NONE) {
+                showError(new IllegalStateException("finish or abort the merge / rebase in progress first"));
+                return;
+            }
+            boolean stash = !(Boolean) info[2];
+            if (stash && !vavi.apps.gitup.model.Settings.get().autoStash()) {
+                showError(new IllegalStateException("commit or stash the local changes before rewriting history"));
+                return;
+            }
+            if (!PushedGuard.allow(this, "Squash", "The commit " + oldest.shortOid(), pushed)) return;
+            // oldest first, like git rebase -i
+            List<CommitRow> ordered = new ArrayList<>(commits);
+            java.util.Collections.reverse(ordered);
+            javax.swing.JTextArea text = new javax.swing.JTextArea(ordered.stream().map(x -> x.message().strip())
+                    .collect(java.util.stream.Collectors.joining("\n\n")), 15, 60);
+            text.setFont(staging.message.getFont());
+            JPanel p = new JPanel(new BorderLayout(0, 6));
+            p.add(new JLabel("Squashed commit message of " + commits.size() + " commits:"), BorderLayout.NORTH);
+            p.add(new JScrollPane(text), BorderLayout.CENTER);
+            if (JOptionPane.showConfirmDialog(this, p, "Squash Into " + oldest.shortOid(), JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) return;
+            String message = text.getText().strip();
+            if (message.isEmpty()) return;
+            exec.submit(() -> withAutoStash(stash, () -> {
+                String before = repo.headTree();
+                GitRepo.RefSnapshot snapshot = repo.snapshotRefs("Squash " + commits.size() + " Commits", false);
+                commandLog.add("git rebase -i " + oldest.shortOid() + "^  # squash "
+                        + commits.stream().limit(commits.size() - 1).map(CommitRow::shortOid).collect(java.util.stream.Collectors.joining(" "))
+                        + " into " + oldest.shortOid(), "GitUpKit GCHistory rewrite");
+                String result = commits.getFirst().oid();
+                try {
+                    // the parents of the not yet squashed commits are not rewritten, the result is the next one to squash
+                    for (int i = 0; i < commits.size() - 1; i++) result = HistoryOps.squashWithParent(workdir, result, message + "\n");
+                } catch (RuntimeException e) {
+                    repo.restore(new GitRepo.RefSnapshot(snapshot.label(), snapshot.head(), snapshot.branches(), GitRepo.Restore.REFS));
+                    if (!java.util.Objects.equals(before, repo.headTree())) repo.resetHardToHead();
+                    throw e;
+                }
+                pushUndo(snapshot);
+                if (!java.util.Objects.equals(before, repo.headTree())) repo.resetHardToHead();
+                return result;
+            }), result -> {
+                statusBar.setText("Squashed " + commits.size() + " commits into " + oldest.shortOid() + " → " + result.substring(0, 7)
+                        + (stash ? " (local changes auto stashed)" : ""));
+                selectedCommit = result;
+                showingWorking = false;
+                refreshAll(true);
+            }, stash ? this::showErrorAndRefresh : this::showError);
+        });
+    }
+
+    /**
      * runs a history rewrite on the git thread, with the local changes stashed as {@link GitRepo#AUTO_STASH_MESSAGE}
      * when {@code stash} (no dialog), they are popped afterwards also when the rewrite fails. when they cannot be
      * popped (conflicts with the new HEAD) the stash is kept and the error tells so.
@@ -1898,11 +1966,55 @@ public class RepoPanel extends JPanel {
         });
     }
 
+    /**
+     * the double click on a commit: the only local branch pointing at it is checked out (safe checkout).
+     * when that is not clear (no branch: detached HEAD, several branches) or the checkout fails (conflicting
+     * local changes) the "Checkout…" dialog is opened, telling why.
+     */
+    private void checkoutCommitDirectly(CommitRow c) {
+        exec.submit(() -> new Object[] {repo.branchesAt(c.oid()), repo.state(), repo.isHeadUnborn() ? null : repo.headOid()}, info -> {
+            @SuppressWarnings("unchecked")
+            List<String> branches = (List<String>) info[0];
+            boolean detached = headBranch == null || "HEAD".equals(headBranch);
+            if (!detached && branches.contains(headBranch) || detached && c.oid().equals(info[2]) && branches.isEmpty()) {
+                statusBar.setText((detached ? c.shortOid() : headBranch) + " is already checked out");
+                return;
+            }
+            if (info[1] != GitRepo.State.NONE) {
+                showError(new IllegalStateException("finish or abort the merge / rebase in progress first"));
+                return;
+            }
+            if (branches.size() != 1) {
+                checkoutCommit(c, branches.isEmpty() ? "No branch points at the commit." : "Several branches point at the commit.");
+                return;
+            }
+            String branch = branches.getFirst();
+            exec.submit(() -> {
+                repo.checkout(branch);
+                return null;
+            }, x -> {
+                statusBar.setText("Checked out " + branch);
+                refreshAll(true);
+                autoFetch();
+            }, t -> checkoutCommit(c, "Checking out " + branch + " failed: " + t.getMessage()));
+        });
+    }
+
     /** SourceTree's "Checkout…" of a commit: a branch pointing at it, or the commit itself (detached HEAD) */
     private void checkoutCommit(CommitRow c) {
+        checkoutCommit(c, null);
+    }
+
+    /** @param problem why the dialog is shown instead of checking out directly, nullable */
+    private void checkoutCommit(CommitRow c, String problem) {
         exec.submit(() -> repo.branchesAt(c.oid()), branches -> {
             javax.swing.ButtonGroup g = new javax.swing.ButtonGroup();
             JPanel p = new JPanel(new GridLayout(0, 1));
+            if (problem != null) {
+                JLabel l = new JLabel("<html><font color='#c04000'>" + escape(problem) + "</font></html>");
+                l.setToolTipText(problem);
+                p.add(l);
+            }
             p.add(new JLabel("Checkout " + c.shortOid() + " \"" + c.summary() + "\""));
             List<javax.swing.JRadioButton> branchButtons = new ArrayList<>();
             for (String b : branches) {

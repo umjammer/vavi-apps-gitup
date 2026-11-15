@@ -80,6 +80,25 @@ class HistoryOpsTest {
         assertEquals("", sh("status", "--porcelain"), "trees did not change, the working copy is in sync");
     }
 
+    /** RepoPanel's "Squash N Commits": squashes the newest into its parent, the result into the next parent and so on */
+    @Test
+    void squashChainInTheMiddle() throws Exception {
+        threeCommits();
+        for (String n : List.of("four", "five")) {
+            Files.writeString(dir.resolve(n + ".txt"), n + "\n");
+            sh("add", ".");
+            sh("commit", "-q", "-m", n);
+        }
+        String tree = sh("rev-parse", "HEAD^{tree}");
+        // four, three, two into two (five is a descendant)
+        String result = sh("rev-parse", "HEAD~1");
+        for (int i = 0; i < 2; i++) result = HistoryOps.squashWithParent(dir, result, "two to four\n");
+        assertEquals("five\ntwo to four\none", sh("log", "--format=%s"));
+        assertEquals(result, sh("rev-parse", "HEAD~1"));
+        assertEquals("four.txt\nthree.txt\ntwo.txt", sh("show", "--name-only", "--format=", "HEAD~1").lines().sorted().reduce((a, b) -> a + "\n" + b).orElse(""));
+        assertEquals(tree, sh("rev-parse", "HEAD^{tree}"), "the final tree is the same");
+    }
+
     @Test
     void fixupInto() throws Exception {
         threeCommits();
