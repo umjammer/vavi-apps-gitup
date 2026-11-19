@@ -37,13 +37,29 @@ typedef int (*JLI_Launch_t)(int argc, char ** argv,
                             int javaw,
                             int ergo);
 
-/** JAVA_HOME, or the newest installed JDK of JAVA_VERSION */
+/** true when the directory is a JDK home (has libjli) */
+static int is_java_home(const char *home) {
+    char path[PATH_MAX];
+    snprintf(path, sizeof(path), "%s/lib/libjli.dylib", home);
+    if (access(path, R_OK) == 0) return 1;
+    snprintf(path, sizeof(path), "%s/lib/jli/libjli.dylib", home);
+    return access(path, R_OK) == 0;
+}
+
+/**
+ * JAVA_HOME, or the newest installed JDK of JAVA_VERSION.
+ * a JAVA_HOME that is gone (a shell started before "brew upgrade" keeps the old versioned path)
+ * is skipped, so the app need not be rebuilt for a JDK update.
+ */
 static int get_java_home(char *out, size_t maxlen) {
     const char *env_home = getenv("JAVA_HOME");
     if (env_home && strlen(env_home) > 0) {
-        strncpy(out, env_home, maxlen - 1);
-        out[maxlen - 1] = '\0';
-        return 0;
+        if (is_java_home(env_home)) {
+            strncpy(out, env_home, maxlen - 1);
+            out[maxlen - 1] = '\0';
+            return 0;
+        }
+        fprintf(stderr, "JAVA_HOME %s is not a JDK, using /usr/libexec/java_home\n", env_home);
     }
     FILE *fp = popen("/usr/libexec/java_home -v " JAVA_VERSION, "r");
     if (!fp) return -1;
