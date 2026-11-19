@@ -124,6 +124,30 @@ class GitRepoTest {
         assertEquals("main", repo.headBranch());
     }
 
+    /**
+     * GitUpKit's libgit2 frees a static buffer when a patch of an empty working directory file
+     * loaded through a filter (core.autocrlf) is freed: the jvm aborts if this regresses.
+     */
+    @Test
+    void emptyWorkdirFileWithFilter() throws Exception {
+        sh("config", "core.autocrlf", "input");
+        write("empty.txt", "");          // untracked, empty
+        write("a.txt", "");              // tracked, emptied
+        for (boolean ws : new boolean[] {false, true}) {
+            repo.setIgnoreWhitespace(ws);
+            for (String path : List.of("empty.txt", "a.txt")) {
+                LazyPatch p = repo.openPatch(unstaged(path));
+                if (p != null) p.close();
+            }
+        }
+        // the deletion shows all the lines
+        repo.setIgnoreWhitespace(false);
+        try (LazyPatch p = repo.openPatch(unstaged("a.txt"))) {
+            assertEquals(1, p.hunks().size());
+            assertEquals(30, p.hunks().getFirst().oldLines());
+        }
+    }
+
     @Test
     void lazyPatch() throws Exception {
         modify();

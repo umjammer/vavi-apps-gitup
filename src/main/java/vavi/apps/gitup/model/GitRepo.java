@@ -377,7 +377,7 @@ public class GitRepo implements AutoCloseable {
     public LazyPatch openPatch(FileChange file) {
         String[] paths = file.oldPath() != null && !file.oldPath().equals(file.path())
                 ? new String[] {file.oldPath(), file.path()} : new String[] {file.path()};
-        return openPatch(file, ws -> {
+        return openPatch(file, !file.staged(), ws -> {
             GitDiffOptions o = diffOptions(null, !file.staged(), ws);
             o.pathspec.set(paths);
             PointerByReference dp = new PointerByReference();
@@ -409,7 +409,7 @@ public class GitRepo implements AutoCloseable {
     public LazyPatch openPatch(String oldestOid, String newestOid, FileChange file) {
         String[] paths = file.oldPath() != null && !file.oldPath().equals(file.path())
                 ? new String[] {file.oldPath(), file.path()} : new String[] {file.path()};
-        return openPatch(file, ws -> {
+        return openPatch(file, false, ws -> {
             Pointer[] trees = rangeTrees(oldestOid, newestOid);
             try {
                 GitDiffOptions o = diffOptions(null, false, ws);
@@ -424,10 +424,11 @@ public class GitRepo implements AutoCloseable {
     }
 
     /**
+     * @param workdir the new side of the diff is the working directory
      * @param differ makes the diff of the file, ignoring whitespace or not
      * @return null when there is no difference
      */
-    private LazyPatch openPatch(FileChange file, Function<Boolean, Pointer> differ) {
+    private LazyPatch openPatch(FileChange file, boolean workdir, Function<Boolean, Pointer> differ) {
         Pointer diff = differ.apply(ignoreWhitespace);
         if (git.git_diff_num_deltas(diff).longValue() == 0) {
             git.git_diff_free(diff);
@@ -438,16 +439,19 @@ public class GitRepo implements AutoCloseable {
             // the actions stay usable when no whitespace change was left out: the patch applies as is
             Pointer full = differ.apply(false);
             try {
-                ignored = !sameHunks(diff, full);
+                ignored = !sameHunks(diff, full, workdir);
             } finally {
                 git.git_diff_free(full);
             }
         }
-        return new LazyPatch(diff, 0, file, ignored);
+        return new LazyPatch(diff, 0, file, ignored, workdir);
     }
 
-    /** @return true when the first deltas of both diffs have the same hunks (ranges and line counts) */
-    private boolean sameHunks(Pointer a, Pointer b) {
+    /**
+     * @param workdir the new side of the diffs is the working directory
+     * @return true when the first deltas of both diffs have the same hunks (ranges and line counts)
+     */
+    private boolean sameHunks(Pointer a, Pointer b, boolean workdir) {
         if (git.git_diff_num_deltas(b).longValue() == 0) return false;
         PointerByReference pa = new PointerByReference();
         PointerByReference pb = new PointerByReference();
@@ -472,10 +476,10 @@ public class GitRepo implements AutoCloseable {
                 }
                 return true;
             } finally {
-                if (pb.getValue() != null) git.git_patch_free(pb.getValue());
+                LazyPatch.freePatch(pb.getValue(), b, 0, workdir);
             }
         } finally {
-            if (pa.getValue() != null) git.git_patch_free(pa.getValue());
+            LazyPatch.freePatch(pa.getValue(), a, 0, workdir);
         }
     }
 
