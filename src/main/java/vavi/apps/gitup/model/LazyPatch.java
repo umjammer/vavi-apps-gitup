@@ -58,10 +58,33 @@ public final class LazyPatch implements AutoCloseable {
     private static final class Handles implements Runnable {
         Pointer diff;
         Pointer patch;
+        /** the patch must not be freed, see {@link LazyPatch#isUnsafeToFree} */
+        boolean leak;
         @Override public synchronized void run() {
-            if (patch != null) { git.git_patch_free(patch); patch = null; }
+            if (patch != null) { if (!leak) git.git_patch_free(patch); patch = null; }
             if (diff != null) { git.git_diff_free(diff); diff = null; }
         }
+    }
+
+    /**
+     * GitUpKit's libgit2 (older than libgit2 commit "diff_file: don't mmap/readbuffer empty files")
+     * loads an empty working directory file through the filters (e.g. core.autocrlf) into the static
+     * {@code git_str__initstr} but flags it as allocated, so git_patch_free() aborts the process
+     * ("pointer being freed was not allocated"). the file may also have been empty only for a moment
+     * while being rewritten, so this is decided by what was loaded, not by the file now.
+     *
+     * @param workdir the new side of the diff is the working directory
+     * @return true when the patch made of the delta must be leaked instead of freed
+     */
+    static boolean isUnsafeToFree(Pointer diff, int index, boolean workdir) {
+        if (!workdir) return false;
+        GitDiffDelta delta = new GitDiffDelta(git.git_diff_get_delta(diff, new NativeLong(index)));
+        return delta.status != LibGit2.GIT_DELTA_DELETED && delta.new_file.size == 0;
+    }
+
+    /** frees a patch made of the delta, unless that crashes (see {@link #isUnsafeToFree}) */
+    static void freePatch(Pointer patch, Pointer diff, int index, boolean workdir) {
+        if (patch != null && !isUnsafeToFree(diff, index, workdir)) git.git_patch_free(patch);
     }
 
     private final Handles handles = new Handles();
@@ -89,8 +112,9 @@ public final class LazyPatch implements AutoCloseable {
      * @param diff a diff owned by this object from now on
      * @param index delta index in the diff
      * @param whitespaceIgnored the diff was made ignoring whitespace
+     * @param workdir the new side of the diff is the working directory
      */
-    LazyPatch(Pointer diff, int index, FileChange file, boolean whitespaceIgnored) {
+    LazyPatch(Pointer diff, int index, FileChange file, boolean whitespaceIgnored, boolean workdir) {
         this.file = file;
         this.whitespaceIgnored = whitespaceIgnored;
         handles.diff = diff;
@@ -99,6 +123,8 @@ public final class LazyPatch implements AutoCloseable {
         PointerByReference pp = new PointerByReference();
         GitException.check(git.git_patch_from_diff(pp, diff, new NativeLong(index)), "patch");
         handles.patch = pp.getValue();
+        // the delta (its size) is updated by loading the content while the patch is made
+        handles.leak = isUnsafeToFree(diff, index, workdir);
 
         GitDiffDelta delta = new GitDiffDelta(git.git_diff_get_delta(diff, new NativeLong(index)));
         deltaStatus = delta.status;
